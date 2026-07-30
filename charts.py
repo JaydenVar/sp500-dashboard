@@ -389,3 +389,38 @@ def multi_series(frames: dict, pal: dict, *, value_col: str, y_title: str,
     fig = style(fig, pal, y_title=y_title, height=height, legend=True,
                 y_tickformat=tickformat, zero_line=zero_line)
     return fig
+
+
+def generic_bars(df, pal: dict, *, label_col: str, value_col: str,
+                 height: int = 340, tickformat: str | None = None) -> go.Figure:
+    """Horizontal bars for a result set whose shape isn't known ahead of time.
+
+    Used only by the generated-SQL path, where the columns come back from a query
+    nobody wrote by hand. Every other chart in this app is built for one specific
+    query and says so; this one is deliberately generic, and the caller decides
+    whether the shape earns a chart at all.
+
+    Direction still carries a value label as well as a color, so the reading does
+    not depend on distinguishing the two hues.
+    """
+    d = df.dropna(subset=[value_col]).copy()
+    d = d.sort_values(value_col).tail(20)
+    signed = bool((d[value_col] < 0).any())
+    colors = ([pal["up"] if v >= 0 else pal["down"] for v in d[value_col]]
+              if signed else [pal["series"][0]] * len(d))
+    fmt = (lambda v: f"{v:+.1%}") if tickformat == ".0%" else (lambda v: f"{v:,.2f}")
+    fig = go.Figure(go.Bar(
+        x=d[value_col], y=d[label_col].astype(str), orientation="h",
+        marker_color=colors, marker_line_width=0,
+        text=[fmt(v) for v in d[value_col]], textposition="outside",
+        textfont=dict(color=pal["text_primary"], size=11), cliponaxis=False,
+        hovertemplate="<b>%{x}</b><extra>%{y}</extra>",
+        name=str(value_col),
+    ))
+    fig = style(fig, pal, height=height, crosshair=False)
+    fig.update_xaxes(showgrid=True, gridcolor=pal["gridline"], showline=False,
+                     tickformat=tickformat)
+    fig.update_yaxes(showgrid=False, tickfont=dict(color=pal["text_secondary"], size=11.5))
+    if signed:
+        fig.add_vline(x=0, line_color=pal["baseline"], line_width=1)
+    return fig

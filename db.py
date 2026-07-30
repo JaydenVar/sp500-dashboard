@@ -70,11 +70,26 @@ class _Median:
         return v[mid] if n % 2 else (v[mid - 1] + v[mid]) / 2.0
 
 
-def get_connection(db_path: Path | str = DB_PATH) -> sqlite3.Connection:
-    conn = sqlite3.connect(db_path)
+def _register(conn: sqlite3.Connection) -> sqlite3.Connection:
     conn.create_function("SQRT", 1, _sqrt)
     conn.create_function("POWER", 2, _power)
     conn.create_function("LN", 1, _ln)
     conn.create_function("EXP", 1, _exp)
     conn.create_aggregate("MEDIAN", 1, _Median)
     return conn
+
+
+def get_connection(db_path: Path | str = DB_PATH) -> sqlite3.Connection:
+    return _register(sqlite3.connect(db_path))
+
+
+def get_readonly_connection(db_path: Path | str = DB_PATH) -> sqlite3.Connection:
+    """A connection SQLite itself refuses to write through.
+
+    Used for model-generated SQL. `sqlguard` already rejects anything that isn't a
+    single SELECT, but that is string analysis and string analysis can be fooled;
+    `mode=ro` is enforced by the engine, so a write that somehow survives the parser
+    still fails at execution. Defense in depth, not a replacement for the guard.
+    """
+    uri = f"file:{Path(db_path).as_posix()}?mode=ro"
+    return _register(sqlite3.connect(uri, uri=True))

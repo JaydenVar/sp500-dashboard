@@ -344,3 +344,84 @@ HANDLERS = {
     "sector": sector,
     "market_summary": market_summary,
 }
+
+
+# ---------------------------------------------------------------------------
+# Generated-SQL results
+# ---------------------------------------------------------------------------
+# Everything above answers a question the app was built to answer, with a chart
+# chosen for that question. Below is the other case: a result set whose shape is
+# only known at runtime. The chart is therefore inferred, and inferred
+# conservatively -- a table is a correct answer, a misleading chart is not.
+
+_DATE_COLS = ("date", "day", "session", "year_month")
+_LABEL_COLS = ("symbol", "name", "sector", "industry", "year", "month", "ticker", "company")
+_RATE_HINTS = ("return", "cagr", "volatility", "drawdown", "yield", "pct", "ratio")
+
+
+def _numeric_cols(df: pd.DataFrame) -> list[str]:
+    return [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
+
+
+def _looks_like_rate(col: str, series: pd.Series) -> bool:
+    """A fraction to render as a percentage, rather than a price or a count.
+
+    The name alone isn't enough -- a column called `total_return` holding 8500
+    is already in percent, and formatting it as one again would read as 850,000%.
+    So the magnitude has to agree with the name.
+    """
+    if not any(h in col.lower() for h in _RATE_HINTS):
+        return False
+    peak = pd.to_numeric(series, errors="coerce").abs().max()
+    return bool(pd.notna(peak) and peak <= 10)
+
+
+def generated(question: str, df: pd.DataFrame, pal, *, insight_text: str = "",
+              key: str = "ans_gen") -> None:
+    """Render a result set produced by generated SQL: insight, chart, table.
+
+    No SQL appears here -- this is User Mode. The statement is disclosed in the
+    Developer Center, collapsed, alongside the route that produced it.
+    """
+    if df is None or df.empty:
+        return st.warning("That returned no rows.")
+
+    if insight_text:
+        _headline(ui.esc(insight_text))
+
+    numeric = _numeric_cols(df)
+    lowered = {c.lower(): c for c in df.columns}
+    date_col = next((lowered[c] for c in _DATE_COLS if c in lowered), None)
+    label_col = next((lowered[c] for c in _LABEL_COLS if c in lowered), None)
+
+    # One chart, only when the shape clearly supports one. Two or more numeric
+    # columns against a date would need a shared-scale decision this path has no
+    # basis to make, so it stays a table.
+    value_col = numeric[0] if numeric else None
+    if value_col is not None and len(df) > 1:
+        tickfmt = ".0%" if _looks_like_rate(value_col, df[value_col]) else None
+        fig = None
+        if date_col and len(numeric) == 1 and len(df) >= 5:
+            # area_series builds its hovertemplate by concatenation, so the format
+            # has to be a real string -- None would raise rather than default.
+            fig = charts.area_series(
+                df.rename(columns={date_col: "date"}).assign(
+                    **{value_col: pd.to_numeric(df[value_col], errors="coerce")}),
+                value_col, pal, y_title=value_col.replace("_", " ").title(),
+                height=300, tickformat=tickfmt or ",.2f")
+        elif label_col and label_col != value_col and len(df) <= 25:
+            fig = charts.generic_bars(df, pal, label_col=label_col,
+                                      value_col=value_col, tickformat=tickfmt)
+        if fig is not None:
+            ui.chart(fig, key=f"{key}_chart", config=PLOT_CONFIG, controls=False,
+                     caption=ui.esc(question))
+
+    pretty = df.copy()
+    pretty.columns = [str(c).replace("_", " ").strip().title() for c in pretty.columns]
+    ui.data_table(pretty, key=f"{key}_tbl", csv_name="answer.csv",
+                  height=min(340, 60 + 35 * len(pretty)))
+    ui.note(
+        "Figures come from the same database as every other page. Returns are price "
+        "returns — dividends are excluded — and companies listed later have shorter "
+        "histories than those listed in 2001."
+    )

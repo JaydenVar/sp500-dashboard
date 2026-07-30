@@ -29,7 +29,9 @@ import components as ui
 import data_access as dal
 import devcenter
 import events
+import nlq
 import queries
+import router
 from charts import PLOT_CONFIG
 from theme import PALETTES, app_css
 from universe import INDEX_SYMBOL
@@ -62,6 +64,18 @@ def resolve_range(preset: str, min_d: dt.date, max_d: dt.date) -> tuple[dt.date,
     if spec == "ytd":
         return max(dt.date(max_d.year, 1, 1), min_d), max_d
     return max(max_d - dt.timedelta(days=int(spec)), min_d), max_d
+
+
+def ask_year(routed) -> int | None:
+    """The year an Ask question pinned itself to, if it named one.
+
+    The router carries this as an ISO date because the model can return a real
+    date; the window controls below think in years, so this narrows it back.
+    """
+    stamp = routed.intent.start_date if routed.intent else ""
+    if len(stamp) >= 4 and stamp[:4].isdigit():
+        return int(stamp[:4])
+    return None
 
 
 def use_example(text: str) -> None:
@@ -156,9 +170,10 @@ if DEV:
 # Overview — the index
 # ---------------------------------------------------------------------------
 if not DEV and section == "Overview":
-    # Ask the Market -- natural language routed to real queries. No LLM: intents
-    # are keyword-scored and answered from the same SQL the rest of the app uses,
-    # so an answer can never disagree with the page beside it.
+    # Ask the Market -- every question goes through the Query Router, which
+    # prefers an existing SQL template and only generates SQL when none fits. A
+    # template answer is therefore the same query the rest of the app runs, so an
+    # answer can never disagree with the page beside it.
     asked = st.text_input(
         "Ask the Market", key="ask_q", label_visibility="collapsed",
         placeholder="Ask the Market…  e.g. “What stock had the highest trading volume?”",
@@ -172,20 +187,33 @@ if not DEV and section == "Overview":
             )
 
     if asked and asked.strip():
-        intent, syms, yr = ask.match(asked, directory)
-        if intent is None:
-            st.info(
-                "I couldn't match that to a question I can answer yet. Try one of "
-                "the suggestions above, or name a company."
+        with st.spinner("Reading the question…"):
+            routed = router.route(
+                asked, directory,
+                window_note=f"The dashboard window is currently {preset} ({START} to {END}).",
             )
-        else:
+
+        if routed.path == router.TEMPLATE_PATH:
             a_start, a_end = START, END
             a_preset = preset
+            yr = ask_year(routed)
             if yr:  # "since 2020" overrides the window for this answer
                 y_start = dt.date(yr, 1, 1)
                 if index_min <= y_start <= end_d:
                     a_start, a_preset = y_start.isoformat(), f"since {yr}"
-            answers.HANDLERS[intent.handler](directory, pal, a_start, a_end, syms, a_preset)
+            answers.HANDLERS[routed.template.handler](
+                directory, pal, a_start, a_end, routed.symbols, a_preset)
+
+        elif routed.path == router.GENERATED_PATH:
+            # No template covered this one, so the answer came from generated SQL.
+            # The insight is written from the returned rows, never from the model's
+            # own recollection -- it can only describe what the query actually found.
+            with st.spinner("Reading the result…"):
+                said = nlq.insight(asked, routed.df.head(30).to_csv(index=False))
+            answers.generated(asked, routed.df, pal, insight_text=said or "")
+
+        else:
+            st.info(routed.error)
         st.divider()
 
     q = dal.quote(INDEX_SYMBOL)

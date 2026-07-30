@@ -592,3 +592,57 @@ SELECT
     (SELECT MIN(pr) FROM port) AS worst_day
 FROM moments m;
 """
+
+
+# ---------------------------------------------------------------------------
+# Schema card for model-generated SQL
+# ---------------------------------------------------------------------------
+# Handed to the model when no template can answer a question. It lists only the
+# objects `sqlguard.ALLOWED_OBJECTS` permits, so the model is never told about a
+# table the validator would then reject -- a mismatch there produces confident
+# SQL that always fails validation, which reads as the feature being broken.
+#
+# Kept here rather than in the prompt module because it describes the SQL layer,
+# and this file is where the SQL layer is documented.
+SCHEMA_CARD = """\
+Tables:
+  symbols(symbol, name, sector, industry, is_index)
+      One row per company. is_index = 1 marks the S&P 500 index itself (^GSPC);
+      equities are is_index = 0. Filter on it unless the question is about the index.
+  prices(symbol, date, open, high, low, close, adj_close, volume)
+      One row per symbol per trading session. date is TEXT 'YYYY-MM-DD'.
+      ~300k rows -- always constrain by symbol, date, or both.
+
+Views (computed on read):
+  daily_returns(symbol, date, close, volume, daily_return)
+      daily_return is a fraction: 0.0125 means +1.25%.
+  drawdowns(symbol, date, close, peak_close, drawdown)
+      drawdown is negative or zero, measured from the running all-time high.
+  moving_averages(symbol, date, close, ma_50, ma_200)
+      NULL until the trailing window is full.
+  rolling_volatility(symbol, date, ann_volatility_21d)
+      21-session annualized standard deviation.
+  yearly_summary(symbol, year, open_close, close_close, year_high, year_low,
+                 avg_volume, trading_days, year_return, is_partial)
+      is_partial = 1 when the year is incomplete at either end of the data.
+  monthly_returns(symbol, year_month, year, month, month_return)
+
+Materialized rollups (fast -- prefer these for cross-company questions):
+  symbol_stats(symbol, name, sector, industry, is_index, first_date, last_date,
+               trading_days, first_close, last_close, total_return, years, cagr,
+               ann_volatility, max_drawdown, current_volatility, last_daily_return,
+               highest_close, lowest_close, avg_volume, avg_dollar_volume)
+      One row per symbol over its own full listed history.
+  latest_quote(symbol, date, open, high, low, close, volume, prev_close,
+               daily_return, w52_high, w52_low)
+      Newest session per symbol.
+
+Conventions:
+  * Returns, CAGR, volatility and drawdown are fractions, not percentages.
+  * Histories differ -- META lists from 2012, TSLA from 2010. Return `years` or
+    `first_date` alongside any all-time ranking so unequal periods stay visible.
+  * Dividends are excluded; these are price returns.
+  * SQLite dialect. SQRT, POWER, LN, EXP and MEDIAN are registered.
+  * Sector figures use MEDIAN, not AVG -- one outlier otherwise stands in for
+    a whole sector.
+"""

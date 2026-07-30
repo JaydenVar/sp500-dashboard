@@ -20,6 +20,7 @@ SECTIONS = [
     "Project Architecture",
     "Database Schema",
     "SQL Explorer",
+    "Query Router",
     "Performance",
     "Technology Stack",
     "Interview Mode",
@@ -660,6 +661,75 @@ This is an analysis and portfolio-demonstration project.
 
 
 # ---------------------------------------------------------------------------
+# Query Router — how a question became a query
+# ---------------------------------------------------------------------------
+def _query_router() -> None:
+    import nlq
+    import router
+    import sqlguard
+
+    ui.section("Query Router", "How a natural-language question becomes a query")
+    ui.note(
+        "Every question in Ask the Market enters here. The router prefers an existing "
+        "SQL template and only generates SQL when no template can answer — so the "
+        "common path runs the same tuned queries as the rest of the app."
+    )
+
+    live = nlq.available()
+    ui.kpi_cards([
+        {"icon": "🧠", "label": "Intent extraction",
+         "value": "Model" if live else "Keywords",
+         "foot": nlq.MODEL if live else "No API key — deterministic fallback"},
+        {"icon": "📚", "label": "Templates", "value": str(len(router.TEMPLATES)),
+         "foot": "Preferred over generated SQL"},
+        {"icon": "🛡", "label": "Readable objects", "value": str(len(sqlguard.ALLOWED_OBJECTS)),
+         "foot": "Everything else is rejected"},
+        {"icon": "🎟", "label": "Generated this session",
+         "value": f"{router.generated_used()}/{router.MAX_GENERATED_PER_SESSION}",
+         "foot": "Per-session cap"},
+    ])
+
+    st.markdown("**Route log** — the path each question took this session.")
+    log = st.session_state.get("route_log", [])
+    if not log:
+        st.caption("No questions asked yet this session. Ask one in User Mode → Overview.")
+    else:
+        st.dataframe(
+            pd.DataFrame(log[::-1]).rename(columns={
+                "question": "Question", "path": "Path", "intent": "Intent",
+                "source": "Parsed by", "detail": "Detail", "ms": "ms"}),
+            width="stretch", hide_index=True,
+        )
+
+    # The generated statement, disclosed here and nowhere else. User Mode shows
+    # the answer; the SQL behind it belongs to whoever is evaluating the build.
+    last = st.session_state.get("last_generated_sql", "")
+    if last:
+        with st.expander("Last generated SQL", expanded=False):
+            st.code(last, language="sql")
+
+    with st.expander("Validation rules applied to generated SQL", expanded=False):
+        st.markdown(
+            "Checked in order, cheapest first, before anything reaches SQLite:\n\n"
+            "1. **Comments stripped**, then the stripped text is what runs — "
+            "`SELECT/**/DROP` and trailing `--` are the standard ways to hide a token.\n"
+            "2. **One statement only** — checked before the SELECT test, because "
+            "`SELECT 1; DROP TABLE prices` passes a prefix check.\n"
+            "3. **Must begin with SELECT or WITH.**\n"
+            "4. **No write keywords** — INSERT, UPDATE, DELETE, DROP, ALTER, CREATE, "
+            "PRAGMA, ATTACH and the rest, matched on word boundaries so `created_at` "
+            "is not a false positive.\n"
+            "5. **Table allowlist** — only the objects below; CTE names defined by the "
+            "query itself are exempt. `sqlite_master` and `meta` are not readable.\n"
+            "6. **EXPLAIN against the real schema** — compiles the statement without "
+            "running it, so a hallucinated column fails here rather than mid-render.\n\n"
+            "Execution then happens on a `mode=ro` connection, where SQLite itself "
+            "refuses writes. String analysis can be fooled; the engine cannot."
+        )
+        st.code("\n".join(sorted(sqlguard.ALLOWED_OBJECTS)), language="text")
+
+
+# ---------------------------------------------------------------------------
 # Router
 # ---------------------------------------------------------------------------
 def render(section: str, directory: pd.DataFrame, start: str, end: str) -> None:
@@ -671,6 +741,8 @@ def render(section: str, directory: pd.DataFrame, start: str, end: str) -> None:
         _schema()
     elif section == "SQL Explorer":
         _sql_explorer(directory, start, end)
+    elif section == "Query Router":
+        _query_router()
     elif section == "Performance":
         _performance()
     elif section == "Technology Stack":

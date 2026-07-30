@@ -4,3 +4,7 @@ pandas==2.3.3
 # zoneinfo reads the system tz database, which slim Linux deploy images often
 # omit. This supplies it so market-status uses real America/New_York DST rules.
 tzdata==2025.2
+
+# Ask the Market's Query Router. Optional at runtime: with no ANTHROPIC_API_KEY
+# the router falls back to the keyword matcher in ask.py and the app is unchanged.
+anthropic==0.116.0
