@@ -26,6 +26,7 @@ import charts
 import components as ui
 import data_access as dal
 import devcenter
+import events
 import queries
 from charts import PLOT_CONFIG
 from theme import PALETTES, app_css
@@ -173,21 +174,29 @@ if not DEV and section == "Overview":
         ])
 
         ui.section("Index level", f"{preset} · hover for the crosshair readout")
-        c1, c2 = st.columns([1, 1])
+        c1, c2 = st.columns([1.4, 1.4])
         with c1:
             scale = st.radio("Scale", ["Linear", "Log"], horizontal=True,
                              key="ov_scale", label_visibility="collapsed")
+        with c2:
+            show_events = st.toggle("Market events", value=True, key="ov_events",
+                                    help="Mark the crashes, bottoms and turning points")
+
         fig = charts.price_line(px, pal, log=(scale == "Log"),
                                 label=ui.fmt_price(px["close"].iloc[-1], 0))
-        st.plotly_chart(fig, use_container_width=True, config=PLOT_CONFIG)
+        evts = events.in_range(START, END) if show_events else []
+        charts.add_events(fig, pal, evts)
+        ui.chart(fig, key="ov_price", config=PLOT_CONFIG,
+                 caption="Drag to pan · drag-select to zoom · toolbar (on hover) for autoscale and PNG export")
+
+        if evts:
+            ui.note(
+                f"{len(evts)} market events marked — hover a diamond for what happened "
+                "and why the chart moves there."
+            )
 
         ui.section("Trading volume", "Daily share volume")
-        st.plotly_chart(charts.volume_bars(px, pal), use_container_width=True, config=PLOT_CONFIG)
-
-        ui.note(
-            "Drag to pan, drag-select to zoom, and use the toolbar (top-right on hover) to "
-            "zoom, autoscale, reset axes, or download the chart as a PNG."
-        )
+        ui.chart(charts.volume_bars(px, pal), key="ov_vol", config=PLOT_CONFIG)
 
 
 # ---------------------------------------------------------------------------
@@ -221,7 +230,7 @@ if not DEV and section == "Market":
         ])
 
         ui.section("Sector performance", f"Median member return · {preset}")
-        st.plotly_chart(charts.sector_bars(sectors, pal), use_container_width=True, config=PLOT_CONFIG)
+        ui.chart(charts.sector_bars(sectors, pal), key="mkt_sector", config=PLOT_CONFIG, controls=False)
         ui.note(
             "Median member return, not the mean: over long windows a mean of total "
             "returns is dominated by one outlier (a single +85,000% name pulls a "
@@ -329,16 +338,15 @@ if not DEV and section == "Companies":
 
         ui.section("Price history", f"{sym} · {preset}")
         if view_mode == "Candles":
-            st.plotly_chart(charts.candlestick(cpx, pal), use_container_width=True, config=PLOT_CONFIG)
+            ui.chart(charts.candlestick(cpx, pal), key="co_candle", config=PLOT_CONFIG)
         else:
-            st.plotly_chart(
-                charts.price_line(cpx, pal, label=ui.fmt_price(cpx["close"].iloc[-1])),
-                use_container_width=True, config=PLOT_CONFIG,
-            )
+            fig_co = charts.price_line(cpx, pal, label=ui.fmt_price(cpx["close"].iloc[-1]))
+            charts.add_events(fig_co, pal, events.in_range(cs, ce))
+            ui.chart(fig_co, key="co_price", config=PLOT_CONFIG)
 
         ui.section("Moving averages", "Close with trailing 50- and 200-session means")
         ma = dal.moving_averages(sym, cs, ce)
-        st.plotly_chart(charts.moving_average_chart(ma, pal), use_container_width=True, config=PLOT_CONFIG)
+        ui.chart(charts.moving_average_chart(ma, pal), key="co_ma", config=PLOT_CONFIG)
         ui.note(
             "A moving-average line only begins once its full window exists, so the "
             "200-session average is absent for the first 200 sessions rather than "
@@ -348,35 +356,33 @@ if not DEV and section == "Companies":
         left, right = st.columns(2)
         with left:
             ui.section("Trading volume")
-            st.plotly_chart(charts.volume_bars(cpx, pal, height=240),
-                            use_container_width=True, config=PLOT_CONFIG)
+            ui.chart(charts.volume_bars(cpx, pal, height=240), key="co_vol", config=PLOT_CONFIG, controls=False)
         with right:
             ui.section("Daily returns")
             dr = dal.daily_returns(sym, cs, ce)
-            st.plotly_chart(charts.returns_bars(dr, pal, height=240),
-                            use_container_width=True, config=PLOT_CONFIG)
+            ui.chart(charts.returns_bars(dr, pal, height=240), key="co_ret", config=PLOT_CONFIG, controls=False)
 
         l2, r2 = st.columns(2)
         with l2:
             ui.section("Cumulative return", "Compounded from daily returns")
             cr = dal.cumulative_return(sym, cs, ce)
             if not cr.empty:
-                st.plotly_chart(
+                ui.chart(
                     charts.area_series(cr, "cumulative_return", pal, color_key="blue",
                                        y_title="Cumulative", height=280,
                                        label=ui.fmt_pct(cr["cumulative_return"].iloc[-1], 0)),
-                    use_container_width=True, config=PLOT_CONFIG,
+                    key="co_cum", config=PLOT_CONFIG, controls=False,
                 )
         with r2:
             ui.section("Rolling volatility", "21-session, annualized")
             cv = dal.volatility(sym, cs, ce)
             if not cv.empty:
-                st.plotly_chart(
+                ui.chart(
                     charts.area_series(cv, "ann_volatility_21d", pal, color_key="red",
                                        y_title="Ann. volatility", height=280,
                                        label=ui.fmt_pct(cv["ann_volatility_21d"].iloc[-1], 0, signed=False),
                                        zero_line=False),
-                    use_container_width=True, config=PLOT_CONFIG,
+                    key="co_vola", config=PLOT_CONFIG, controls=False,
                 )
 
         # ---- comparison ----
@@ -402,9 +408,9 @@ if not DEV and section == "Companies":
                     "Comparison scale", ["Log", "Linear"] if wide else ["Linear", "Log"],
                     horizontal=True, key="cmp_scale", label_visibility="collapsed",
                 )
-                st.plotly_chart(
+                ui.chart(
                     charts.indexed_comparison(pivot, pal, log=(cscale == "Log")),
-                    use_container_width=True, config=PLOT_CONFIG,
+                    key="co_cmp", config=PLOT_CONFIG,
                 )
                 if wide and cscale == "Log":
                     ui.note(
@@ -488,7 +494,7 @@ if not DEV and section == "Performance":
         if not full.empty:
             for idx in (full["year_return"].idxmax(), full["year_return"].idxmin()):
                 y.loc[idx, "label"] = ui.fmt_pct(y.loc[idx, "year_return"], 1)
-        st.plotly_chart(charts.yearly_return_bars(y, pal), use_container_width=True, config=PLOT_CONFIG)
+        ui.chart(charts.yearly_return_bars(y, pal), key="perf_yearly", config=PLOT_CONFIG, controls=False)
         partials = y.loc[y["partial"], "year"].tolist()
         if partials:
             ui.note(
@@ -501,8 +507,7 @@ if not DEV and section == "Performance":
     if not m.empty:
         piv = m.pivot(index="year", columns="month", values="month_return")
         piv = piv.reindex(columns=[f"{i:02d}" for i in range(1, 13)])
-        st.plotly_chart(charts.seasonality_heatmap(piv, pal, MONTHS),
-                        use_container_width=True, config=PLOT_CONFIG)
+        ui.chart(charts.seasonality_heatmap(piv, pal, MONTHS), key="perf_season", config=PLOT_CONFIG, controls=False)
         with st.expander("Monthly returns — table view"):
             st.dataframe(piv.style.format("{:+.2%}", na_rep="—"), use_container_width=True)
 
@@ -552,16 +557,18 @@ if not DEV and section == "Risk":
             showarrow=True, arrowhead=0, arrowcolor=pal["muted"], ax=0, ay=-26,
             font=dict(color=pal["text_primary"], size=11.5),
         )
-        st.plotly_chart(fig, use_container_width=True, config=PLOT_CONFIG)
+        charts.add_events(fig, pal, events.in_range(rs, END))
+        ui.chart(fig, key="risk_dd", config=PLOT_CONFIG,
+                 caption="Event markers show what drove each decline — hover a diamond for detail")
 
         ui.section("Rolling volatility", "21-session, annualized")
         if not vol.empty:
-            st.plotly_chart(
+            ui.chart(
                 charts.area_series(vol, "ann_volatility_21d", pal, color_key="blue",
                                    y_title="Ann. volatility", height=300,
                                    label=ui.fmt_pct(vol["ann_volatility_21d"].iloc[-1], 0, signed=False),
                                    zero_line=False),
-                use_container_width=True, config=PLOT_CONFIG,
+                key="risk_vol", config=PLOT_CONFIG, controls=False,
             )
 
         ui.section("Risk vs return", "All symbols over their own full history")
@@ -584,7 +591,7 @@ if not DEV and section == "Risk":
             f.update_xaxes(title=dict(text="Annualized volatility",
                                       font=dict(color=pal["muted"], size=11.5)),
                            tickformat=".0%", showgrid=True, gridcolor=pal["gridline"])
-            st.plotly_chart(f, use_container_width=True, config=PLOT_CONFIG)
+            ui.chart(f, key="risk_scatter", config=PLOT_CONFIG, controls=False)
             ui.note(
                 "One point per symbol, over each symbol's own listed history — so the "
                 "horizon differs between points. Labels are drawn for every point here "

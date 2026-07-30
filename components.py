@@ -199,6 +199,36 @@ def quote_strip(name: str, symbol: str, q: pd.Series, meta: str, pal: dict) -> N
 
 
 # ---------------------------------------------------------------------------
+# Charts
+# ---------------------------------------------------------------------------
+def chart(fig, *, key: str, config: dict, caption: str = "", controls: bool = True) -> None:
+    """Render a Plotly figure with a visible reset control.
+
+    Zoom and pan live in the browser, so Python can't read them back. Bumping a
+    nonce in the chart's key remounts the component, which is what actually
+    discards the client-side view state -- the same thing the toolbar's "reset
+    axes" does, but as a control a reader can find without hovering first.
+    """
+    nonce_key = f"__nonce_{key}"
+    nonce = st.session_state.get(nonce_key, 0)
+
+    if controls:
+        left, right = st.columns([5, 1.15])
+        with left:
+            if caption:
+                st.markdown(f'<div class="note">{esc(caption)}</div>', unsafe_allow_html=True)
+        with right:
+            if st.button("↺ Reset view", key=f"__reset_{key}", use_container_width=True,
+                         help="Restore the default zoom, pan and axis range"):
+                st.session_state[nonce_key] = nonce + 1
+                st.rerun()
+    elif caption:
+        st.markdown(f'<div class="note">{esc(caption)}</div>', unsafe_allow_html=True)
+
+    st.plotly_chart(fig, use_container_width=True, config=config, key=f"{key}_{nonce}")
+
+
+# ---------------------------------------------------------------------------
 # Tables
 # ---------------------------------------------------------------------------
 def data_table(

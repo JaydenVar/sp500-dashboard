@@ -8,6 +8,8 @@ ink tokens rather than the series color.
 
 from __future__ import annotations
 
+import datetime as dt
+
 import plotly.graph_objects as go
 
 # Modebar: zoom, pan, box/lasso-free selection removed, image download kept.
@@ -24,6 +26,80 @@ PLOT_CONFIG = {
     "modeBarButtonsToRemove": ["select2d", "lasso2d", "toggleSpikelines"],
     "toImageButtonOptions": {"format": "png", "scale": 2, "filename": "chart"},
 }
+
+
+def add_events(fig: go.Figure, pal: dict, evts, *, y_domain: tuple[float, float] = (0, 1),
+               label: bool = True) -> go.Figure:
+    """Mark market events on a time axis.
+
+    Drawn as paper-referenced vertical lines so they don't disturb the y-range,
+    plus an invisible scatter carrying the hover text -- a shape alone can't have
+    a tooltip, and the explanation is the point of the marker.
+    """
+    if evts is None or len(evts) == 0:
+        return fig
+
+    # Events cluster (2020 has a peak and a bottom five weeks apart), and rotated
+    # labels sitting at one height overlap into an unreadable smear. Labels are
+    # therefore tiered: anything too close to the previously labelled event drops
+    # to the next tier down. The diamonds and hover text stay put regardless.
+    ordinals = [dt.date.fromisoformat(e[0]).toordinal() for e in evts]
+    span = max(ordinals) - min(ordinals) or 1
+    TIERS = (1.0, 0.80, 0.60)
+    MIN_GAP = 0.055  # fraction of the window below which labels would collide
+
+    xs, texts, colors = [], [], []
+    tier, last_labeled = 0, None
+    for (date, short, cat, note), o in zip(evts, ordinals):
+        color = pal["down"] if cat == "crisis" else pal["up"] if cat == "recovery" else pal["muted"]
+        fig.add_vline(x=date, line_width=1, line_dash="dot", line_color=color, opacity=0.5)
+
+        if label:
+            if last_labeled is not None and (o - last_labeled) / span < MIN_GAP:
+                tier = (tier + 1) % len(TIERS)
+            else:
+                tier = 0
+            last_labeled = o
+            fig.add_annotation(
+                x=date, y=TIERS[tier], yref="paper", text=short, showarrow=False,
+                textangle=-90, xanchor="left", yanchor="top", xshift=3,
+                font=dict(color=pal["muted"], size=9), opacity=0.9,
+            )
+
+        xs.append(date)
+        texts.append(f"<b>{short}</b><br>{date}<br>{_wrap(note, 46)}")
+        colors.append(color)
+
+    # The markers ride an invisible secondary axis fixed to 0..1, so they always
+    # sit at the top of the plot regardless of the data's scale. (A trace cannot
+    # use `yref="paper"` -- that exists only on annotations and shapes.)
+    fig.add_trace(go.Scatter(
+        x=xs, y=[0.985] * len(xs), yaxis="y2",
+        mode="markers", marker=dict(size=9, color=colors, symbol="diamond",
+                                    line=dict(width=1.5, color=pal["surface"])),
+        hovertemplate="%{text}<extra></extra>", text=texts,
+        showlegend=False, name="Market event", hoverlabel=dict(align="left"),
+    ))
+    fig.update_layout(yaxis2=dict(
+        overlaying="y", side="right", range=[0, 1],
+        showgrid=False, zeroline=False, showticklabels=False,
+        fixedrange=True, visible=False,
+    ))
+    return fig
+
+
+def _wrap(text: str, width: int) -> str:
+    """Soft-wrap hover text; Plotly tooltips don't wrap on their own."""
+    out, line = [], ""
+    for word in text.split():
+        if len(line) + len(word) + 1 > width:
+            out.append(line)
+            line = word
+        else:
+            line = f"{line} {word}".strip()
+    if line:
+        out.append(line)
+    return "<br>".join(out)
 
 
 def wash(hex_color: str, alpha: float = 0.10) -> str:
