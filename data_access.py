@@ -75,6 +75,11 @@ def global_last_date() -> dt.date:
     return dt.date.fromisoformat(df.iloc[0]["d"])
 
 
+@st.cache_data(ttl=TTL, show_spinner=False)
+def row_count() -> int:
+    return int(_read("SELECT COUNT(*) AS n FROM prices;").iloc[0]["n"])
+
+
 # ---------------------------------------------------------------------------
 # Per-symbol series
 # ---------------------------------------------------------------------------

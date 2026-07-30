@@ -1,9 +1,18 @@
-"""Market Analytics — a SQL-first equity dashboard.
+"""Market Analytics — a SQL-first equity platform.
 
-Every figure on screen is the output of a SQL query (see queries.py) against a
-local SQLite database whose analysis lives in views and materialized rollups
-(see build_db.py). Python queries and draws; it does no analysis of its own.
-The SQL Explorer tab shows each query, its explanation, and its measured runtime.
+Two deliberately separate experiences share this entry point:
+
+* **User Mode** (default) is the financial product. It shows markets, companies,
+  performance and risk, and never surfaces SQL, schemas, timings or any other
+  implementation detail -- mixing those into an end-user screen is what makes an
+  application read as a class project rather than a product.
+* **Developer Center** (see devcenter.py) is where all of that technical material
+  lives, organized for someone evaluating the engineering.
+
+Underneath both: every figure on screen is the output of a SQL query
+(see queries.py) against a SQLite database whose analysis lives in views and
+materialized rollups (see build_db.py). This module lays out and draws; it
+computes no metrics of its own.
 """
 
 from __future__ import annotations
@@ -16,6 +25,7 @@ import streamlit as st
 import charts
 import components as ui
 import data_access as dal
+import devcenter
 import queries
 from charts import PLOT_CONFIG
 from theme import PALETTES, app_css
@@ -74,7 +84,7 @@ ui.header(
 # ---------------------------------------------------------------------------
 # Control row — one row, above everything it scopes
 # ---------------------------------------------------------------------------
-ctl = st.columns([5.2, 1.5, 1.15])
+ctl = st.columns([4.0, 1.5, 1.9])
 with ctl[0]:
     preset = st.radio(
         "Date range", list(PRESETS), index=list(PRESETS).index(DEFAULT_PRESET),
@@ -89,37 +99,50 @@ with ctl[1]:
         st.session_state.theme = theme_choice
         st.rerun()
 with ctl[2]:
-    if st.button("↺ Reset view", use_container_width=True,
-                 help="Restore the default date range and clear chart zoom/pan"):
-        for k in ("preset", "cmp_syms", "co_symbol"):
-            st.session_state.pop(k, None)
-        st.rerun()
+    mode = st.radio(
+        "Mode", ["User", "Developer"], horizontal=True, key="mode",
+        label_visibility="collapsed",
+        help="User Mode is the financial product. Developer Center documents how it's built.",
+    )
+
+DEV = mode == "Developer"
 
 index_min, index_max = dal.date_bounds(INDEX_SYMBOL)
 start_d, end_d = resolve_range(preset, index_min, index_max)
 START, END = start_d.isoformat(), end_d.isoformat()
 
 st.markdown(
-    f'<div class="note">Window <b>{start_d:%b %d, %Y}</b> → <b>{end_d:%b %d, %Y}</b>'
-    f' · {preset} · filters scope every tab below</div>',
+    f'<div class="note">'
+    f'<span class="modepill{" dev" if DEV else ""}">'
+    f'{"◆ Developer Center" if DEV else "● User Mode"}</span>'
+    f'&nbsp;&nbsp;Window <b>{start_d:%b %d, %Y}</b> → <b>{end_d:%b %d, %Y}</b>'
+    f' · {preset} · scopes every section below</div>',
     unsafe_allow_html=True,
 )
 
-SECTIONS = ["Overview", "Market", "Companies", "Performance", "Risk", "SQL Explorer", "About"]
+# Two entirely separate experiences. User Mode never shows SQL, schemas, timings
+# or implementation detail -- mixing those into an end-user screen is what makes
+# an app read as a class project rather than a product.
+USER_SECTIONS = ["Overview", "Market", "Companies", "Performance", "Risk", "About"]
 
 # Deliberately a radio, not st.tabs. st.tabs renders EVERY tab's body on every
-# rerun, which (a) runs all seven sections' queries when only one is visible and
+# rerun, which (a) runs all sections' queries when only one is visible and
 # (b) makes Plotly measure charts inside hidden tabs, so they render at a
 # fraction of the container width. Rendering only the active section fixes both.
 section = st.radio(
-    "Section", SECTIONS, horizontal=True, key="section", label_visibility="collapsed",
+    "Section", devcenter.SECTIONS if DEV else USER_SECTIONS,
+    horizontal=True, key="dev_section" if DEV else "section",
+    label_visibility="collapsed",
 )
+
+if DEV:
+    devcenter.render(section, directory, START, END)
 
 
 # ---------------------------------------------------------------------------
 # Overview — the index
 # ---------------------------------------------------------------------------
-if section == "Overview":
+if not DEV and section == "Overview":
     q = dal.quote(INDEX_SYMBOL)
     ws = dal.window_stats(INDEX_SYMBOL, START, END)
     px = dal.prices(INDEX_SYMBOL, START, END)
@@ -170,7 +193,7 @@ if section == "Overview":
 # ---------------------------------------------------------------------------
 # Market — breadth, sectors, movers
 # ---------------------------------------------------------------------------
-if section == "Market":
+if not DEV and section == "Market":
     movers = dal.period_movers(START, END)
     sectors = dal.sector_performance(START, END)
 
@@ -239,7 +262,7 @@ if section == "Market":
 # ---------------------------------------------------------------------------
 # Companies — search, overview, per-symbol charts, comparison
 # ---------------------------------------------------------------------------
-if section == "Companies":
+if not DEV and section == "Companies":
     # Autocomplete: one option per symbol, searchable by ticker OR company name
     # because the label contains both and Streamlit's selectbox filters substrings.
     label_by_key = {f"{r.symbol} — {r['name']}": r.symbol for _, r in equities.iterrows()}
@@ -414,7 +437,7 @@ if section == "Companies":
 # ---------------------------------------------------------------------------
 # Performance — leaderboards over each symbol's own history
 # ---------------------------------------------------------------------------
-if section == "Performance":
+if not DEV and section == "Performance":
     lb = dal.leaderboard()
     ui.section("Long-run performance", "Each symbol over its own listed history")
     ui.note(
@@ -487,7 +510,7 @@ if section == "Performance":
 # ---------------------------------------------------------------------------
 # Risk
 # ---------------------------------------------------------------------------
-if section == "Risk":
+if not DEV and section == "Risk":
     rsym = st.selectbox(
         "Symbol", list(directory["symbol"]), key="risk_sym",
         format_func=lambda s: f"{s} — {directory.loc[directory['symbol'] == s, 'name'].iloc[0]}",
@@ -570,127 +593,72 @@ if section == "Risk":
 
 
 # ---------------------------------------------------------------------------
-# SQL Explorer
+# About — the USER-facing one: what the numbers mean, never how it is built.
+# Architecture, SQL and performance all live in the Developer Center.
 # ---------------------------------------------------------------------------
-if section == "SQL Explorer":
-    ui.section("SQL Explorer", "Every query behind this dashboard, run live")
-    ui.note(
-        "Pick a query to see the exact SQL, what it does and why, the rows it returns, "
-        "and how long it took. Timings are measured on an uncached run, so they reflect "
-        "real query cost rather than a cache hit."
-    )
-    st.write("")
-
-    names = list(queries.EXPLORER)
-    choice = st.selectbox("Query", names, key="sql_pick")
-    spec = queries.EXPLORER[choice]
-
-    needed = spec["params"]
-    params: dict[str, str] = {}
-    if needed:
-        cols = st.columns(len(needed))
-        for c, p in zip(cols, needed):
-            with c:
-                if p == "symbol":
-                    params[p] = st.selectbox("symbol", list(directory["symbol"]), key="sql_sym")
-                elif p == "start":
-                    params[p] = st.text_input("start", START, key="sql_start")
-                elif p == "end":
-                    params[p] = st.text_input("end", END, key="sql_end")
-
-    try:
-        df, ms = dal.timed_read(str(spec["sql"]), params)
-        err = None
-    except Exception as exc:
-        df, ms, err = pd.DataFrame(), 0.0, str(exc)
+if not DEV and section == "About":
+    ui.section("About this data", "What these numbers mean, and what they don't")
 
     ui.kpi_cards([
-        {"icon": "⏱", "label": "Execution time", "value": f"{ms:,.1f} ms",
-         "foot": "Uncached, measured just now"},
-        {"icon": "🧾", "label": "Rows returned", "value": f"{len(df):,}",
-         "foot": f"{len(df.columns)} columns"},
-        {"icon": "🗄", "label": "Engine", "value": "SQLite", "small": True,
-         "foot": "Views + materialized rollups"},
+        {"icon": "\U0001F4C5", "label": "History", "value": "25 years",
+         "foot": "Daily bars since 2001"},
+        {"icon": "\U0001F3E2", "label": "Companies", "value": "49",
+         "foot": "Large-cap US equities"},
+        {"icon": "\U0001F4C8", "label": "Benchmark", "value": "S&P 500", "small": True,
+         "foot": "Index used throughout"},
+        {"icon": "\U0001F553", "label": "Updated", "value": last_date.strftime("%b %d, %Y"),
+         "small": True, "foot": "Latest close in the dataset"},
     ])
 
-    st.markdown(f'<div class="note" style="margin:10px 0 2px;">{ui.esc(str(spec["explain"]))}</div>',
-                unsafe_allow_html=True)
-    st.code(str(spec["sql"]).strip(), language="sql")
-
-    if err:
-        st.error(f"Query failed: {err}")
-    elif df.empty:
-        st.info("Query returned no rows for those parameters.")
-    else:
-        st.markdown('<div class="note">Returned dataset (first 200 rows)</div>', unsafe_allow_html=True)
-        st.dataframe(df.head(200), use_container_width=True, hide_index=True, height=360)
-        st.download_button("⬇ Export result CSV", data=df.to_csv(index=False),
-                           file_name="query_result.csv", mime="text/csv")
-
-    with st.expander("Schema — tables, views and materialized rollups"):
-        schema = dal.timed_read(
-            "SELECT type, name FROM sqlite_master "
-            "WHERE name NOT LIKE 'sqlite_%' AND name NOT LIKE 'idx_%' "
-            "ORDER BY CASE type WHEN 'table' THEN 0 ELSE 1 END, name;"
-        )[0]
-        st.dataframe(schema, use_container_width=True, hide_index=True)
-
-
-# ---------------------------------------------------------------------------
-# About
-# ---------------------------------------------------------------------------
-if section == "About":
-    ui.section("About this project", "How it is built, and what the numbers do and don't mean")
     st.markdown(
         """
-**Architecture.** A SQL-first pipeline in four steps:
+#### How to read the metrics
 
-1. `fetch_data.py` pulls ~25 years of daily OHLCV per symbol from Yahoo Finance's
-   chart API into `data/prices.csv`. It caches each symbol as it arrives, so a
-   rate-limited run resumes instead of starting over.
-2. `build_db.py` loads the CSVs into SQLite and defines the analysis as **views**
-   — daily returns, running-peak drawdowns, moving averages, rolling volatility,
-   calendar-year and monthly rollups — all partitioned by symbol.
-3. The two most expensive rollups are **materialized** into tables at build time.
-   The leaderboard went from ~2,100 ms as a live view to ~1 ms as a table; the
-   quote snapshot from ~286 ms to under 1 ms.
-4. `app.py` queries and draws. It performs no analysis of its own — every number
-   on screen comes back from SQL. The **SQL Explorer** tab proves it.
+| Metric | What it tells you |
+|---|---|
+| **Return** | Simple price change between the first and last day of your window. |
+| **CAGR** | The annual growth rate that compounds to that return. It makes windows of different lengths comparable. |
+| **Volatility** | How much daily prices swing, annualized. Higher means a rougher ride, not necessarily a worse outcome. |
+| **Max drawdown** | The deepest fall from a previous high. This is the loss you would have had to sit through. |
+| **52-week range** | The highest and lowest price of the past year — context for where the price sits today. |
+| **Moving average** | The average price over the last 50 or 200 sessions, used to read trend rather than noise. |
 
-**Why no dual-axis charts.** Comparing symbols at different price levels uses
-rebasing to 100 on a single shared axis. Two independent y-scales can be aligned
-to imply any correlation you want, which is the most common way a finance chart
-misleads.
+**Why return alone isn't enough.** Two companies can post the same CAGR while
+one delivered it smoothly and the other through a 90% collapse and recovery.
+Volatility and drawdown describe that difference, which is why they sit beside
+every return figure here.
 
-**Honest limits** — the things this data genuinely cannot support:
+#### Important limitations
 
-- **Price returns, not total returns.** Dividends are excluded, so long-run
-  figures understate what a shareholder actually earned.
-- **No market cap.** It requires share counts, which no reachable free endpoint
-  provides. Rather than hardcode a figure that goes stale, the app shows average
-  dollar turnover, computed from data actually in the database.
-- **Unequal histories.** Symbols listed later (META 2012, TSLA 2010) have shorter
-  records. All-time leaderboards therefore show `Years` and `From` rather than
-  silently ranking unequal periods against each other.
-- **Sectors are equal-weighted**, not market-cap-weighted, for the same reason.
-- **Survivorship bias.** The universe is a fixed list of companies that exist
-  today, so it omits firms that failed or were acquired — which flatters
-  long-run returns.
-- **Market status is schedule-based.** Weekday 09:30–16:00 ET; exchange holidays
-  are not modelled.
-- **Partial calendar years** at each end of the window are flagged and faded,
-  because a part-year figure is not a calendar-year return.
+These genuinely affect how the numbers should be read:
 
-**Accessibility.** Series colors come from a palette validated per theme for
-colorblind separation (Machado 2009 protan/deutan simulation) and WCAG contrast
-against each mode's surface. Identity never rests on color alone: legends and
-direct labels accompany every multi-series chart, and each chart has a table
-view or CSV export.
+- **Dividends are excluded.** All figures are price returns, so long-run results
+  understate what a shareholder actually earned — meaningfully so for
+  high-dividend companies.
+- **Only companies that exist today are included.** Firms that failed or were
+  acquired are absent, which flatters long-run averages. This is called
+  survivorship bias and it affects every ranking on the site.
+- **Company histories differ in length.** Meta lists in 2012, Tesla in 2010.
+  All-time rankings show each company's start date and number of years so
+  unequal periods are visible rather than hidden.
+- **Sector figures are equal-weighted** and reported as the median member, so one
+  very large company cannot stand in for its whole sector.
+- **Market status follows the regular schedule** (weekdays, 09:30-16:00 ET).
+  Exchange holidays are not modelled.
+- **Partial years are marked.** The first and last calendar years of the window
+  are incomplete, so their bars are faded and asterisked.
+
+#### Not investment advice
+
+This is an analytical tool built to explore historical market data. Nothing here
+is a recommendation to buy or sell any security. Past performance does not
+predict future results.
 """
     )
+
     ui.section("Data source")
     ui.note(
-        "Yahoo Finance chart API (unauthenticated). Prices are daily closes. "
-        "This project is for analysis and portfolio demonstration — it is not "
-        "investment advice."
+        "Daily open, high, low, close and volume from Yahoo Finance. Sector and "
+        "industry classifications are hand-maintained. Curious how it is built? "
+        "Switch to Developer Center in the top-right."
     )

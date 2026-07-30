@@ -209,6 +209,35 @@ hr {{ border-color: var(--border); margin: 1.25rem 0; }}
 .q-price {{ font-size: 2.05rem; font-weight: 680; line-height: 1; letter-spacing: -0.03em; }}
 .q-chg {{ font-size: 0.95rem; font-weight: 650; margin-left: 2px; }}
 
+/* ---------- developer center ---------- */
+.qbox {{
+  background: linear-gradient(135deg, {p['hover']}, transparent 70%);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: 10px;
+  padding: 14px 18px;
+  margin: 6px 0 14px;
+}}
+.qbox-k {{
+  font-size: 0.66rem; font-weight: 680; color: var(--accent);
+  text-transform: uppercase; letter-spacing: .09em; margin-bottom: 5px;
+}}
+.qbox-q {{ font-size: 1.08rem; font-weight: 620; color: var(--text-1); line-height: 1.4; }}
+.uses {{
+  display: inline-block;
+  background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: 7px; padding: 6px 12px; margin: 0 7px 7px 0;
+  font-size: 0.82rem; color: var(--text-1);
+}}
+.modepill {{
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 0.68rem; font-weight: 700; letter-spacing: .07em;
+  text-transform: uppercase; padding: 4px 10px; border-radius: 999px;
+  background: var(--surface-2); border: 1px solid var(--border-strong);
+  color: var(--text-2);
+}}
+.modepill.dev {{ border-color: var(--accent); color: var(--accent); }}
+
 /* ---------- section headings ---------- */
 .sec {{ display: flex; align-items: baseline; gap: 9px; margin: 20px 0 4px; }}
 .sec-t {{ font-size: 1.0rem; font-weight: 660; letter-spacing: -0.012em; color: var(--text-1); }}

@@ -251,101 +251,250 @@ ORDER BY median_return DESC;
 # --------------------------------------------------------------------------
 # SQL Explorer registry: what gets showcased, with an explanation each.
 # --------------------------------------------------------------------------
+# SQL Explorer registry.
+#
+# Each entry is a *story*, not a code dump: the business question it answers, a
+# plain-English explanation, what it costs and touches, and where its output
+# actually appears in the product. The SQL is one field among several rather
+# than the headline.
+# --------------------------------------------------------------------------
 EXPLORER: dict[str, dict[str, object]] = {
-    "Leaderboard (symbol_stats)": {
+    "Long-run performance leaderboard": {
+        "question": "Which companies compounded fastest over their listed history?",
         "sql": LEADERBOARD,
         "params": [],
+        "read_path": "Rollup table",
+        "read_path_note": "Precomputed at build time",
+        "indexes": ["idx_symbol_stats (symbol)"],
+        "objects": ["symbol_stats (materialized)"],
+        "powers": [
+            "Performance → Long-run performance table",
+            "Risk → Risk vs return scatter",
+            "Developer Center → Performance benchmarks",
+        ],
         "explain": (
-            "Reads the `symbol_stats` view — one row per symbol. That view stitches "
-            "together six CTEs (period bounds, return moments, price extremes, worst "
-            "drawdown, latest rolling volatility, last daily move) and derives CAGR with "
-            "`POWER(last/first, 1/years) - 1`. Because each symbol's window is its own "
-            "listed history, `first_date` and `years` are returned alongside so unequal "
-            "periods stay visible instead of being compared silently."
+            "**What it does.** Returns one row per company with its total return, "
+            "compound annual growth rate (CAGR), annualized volatility and worst "
+            "drawdown, over that company's own listed history.\n\n"
+            "**Why it exists.** \"Who won?\" is the first question anyone asks of "
+            "market data. Total return alone is misleading — it rewards whoever has "
+            "been listed longest — so CAGR normalizes for time and volatility and "
+            "drawdown show what an investor endured to earn it.\n\n"
+            "**How it works.** It reads `symbol_stats`, a rollup built from six CTEs: "
+            "period bounds, return moments, price extremes, worst drawdown, latest "
+            "rolling volatility and last daily move. CAGR is geometric — "
+            "`POWER(last/first, 1/years) - 1` over actual elapsed calendar time from "
+            "`julianday`, not a simple average.\n\n"
+            "**The honesty check.** Each company's window is its own listed history, so "
+            "the periods are *not* equal. `first_date` and `years` are returned "
+            "alongside so an unequal comparison can't hide — a 2012 listing has not "
+            "had the same run as a 2001 one."
         ),
     },
-    "Period movers (date-scoped)": {
+    "Best and worst performers in a period": {
+        "question": "Who were the biggest winners and losers over a specific date range?",
         "sql": PERIOD_MOVERS,
         "params": ["start", "end"],
+        "read_path": "Indexed scan",
+        "read_path_note": "Range-scanned per symbol",
+        "indexes": ["idx_prices_symbol_date (symbol, date)", "idx_prices_date (date)"],
+        "objects": ["prices", "symbols"],
+        "powers": [
+            "Market → Advancing / declining breadth",
+            "Market → Top gainer and worst decliner cards",
+            "Market → Movers table",
+        ],
         "explain": (
-            "Ranks every symbol by return inside the selected window. It finds each "
-            "symbol's first and last session in range (`GROUP BY` + `MIN/MAX(date)`), "
-            "self-joins back to get the closes at those two dates, and divides. This is "
-            "why the gainers/losers tables respond to the date filter rather than being "
-            "fixed all-time lists."
+            "**What it does.** Ranks every company by its return *inside the selected "
+            "window*, rather than over all time.\n\n"
+            "**Why it exists.** All-time winners are a fixed list that never changes. "
+            "The useful question is 'who moved during the period I'm looking at' — "
+            "which is what makes the date range meaningful rather than decorative.\n\n"
+            "**How it works.** For each symbol it finds the first and last trading "
+            "session inside the range (`GROUP BY symbol` with `MIN/MAX(date)`), joins "
+            "back to `prices` to fetch the closes on exactly those two dates, and "
+            "divides. Joining back is what makes it correct across symbols with "
+            "different trading calendars — you can't assume every symbol traded on the "
+            "window's first day."
         ),
     },
     "Sector performance": {
+        "question": "Which sectors led and lagged, without one mega-cap distorting the answer?",
         "sql": SECTOR_PERFORMANCE,
         "params": ["start", "end"],
+        "read_path": "Indexed scan + aggregate",
+        "read_path_note": "Custom MEDIAN aggregate",
+        "indexes": ["idx_prices_date (date)"],
+        "objects": ["prices", "symbols"],
+        "powers": ["Market → Sector performance chart"],
         "explain": (
-            "Computes a per-symbol window return, then aggregates to sector. The "
-            "headline figure is the MEDIAN, not the mean: over long windows the mean "
-            "of total returns is dominated by a single outlier (one +85,000% name "
-            "drags a sector 'average' into five figures), which describes that stock "
-            "rather than the sector. MEDIAN is a custom aggregate registered in "
-            "db.py, since SQLite has no built-in one. Mean/min/max are returned "
-            "alongside for comparison. Members are equal-weighted, not "
+            "**What it does.** Computes each company's return over the window, then "
+            "aggregates to sector — reporting the **median** member return.\n\n"
+            "**Why median rather than mean.** This is the most important decision in "
+            "the query. Over a 25-year window the mean showed Information Technology at "
+            "**+13,553%** — a figure that was almost entirely Apple's +85,867%. That "
+            "describes one stock, not a sector. The median gives ~+1,082%, which "
+            "actually characterizes a typical member.\n\n"
+            "**How it works.** A CTE computes per-symbol window returns, then "
+            "`GROUP BY sector` applies `MEDIAN`, a custom aggregate registered in "
+            "`db.py` because SQLite has no built-in one. Mean, best and worst are "
+            "returned alongside so the skew stays visible on hover.\n\n"
+            "**Limitation, stated.** Members are equal-weighted, not "
             "market-cap-weighted — share counts aren't available from the free source."
         ),
     },
-    "Indexed comparison (rebase to 100)": {
+    "Comparing companies fairly": {
+        "question": "How do I compare companies trading at completely different prices?",
         "sql": INDEXED_COMPARISON,
         "params": ["start", "end"],
+        "read_path": "Indexed scan",
+        "read_path_note": "One pass, rebased in SQL",
+        "indexes": ["idx_prices_date (date)", "idx_prices_symbol_date (symbol, date)"],
+        "objects": ["prices"],
+        "powers": [
+            "Companies → Comparison chart",
+            "Companies → Indexed comparison table",
+        ],
         "explain": (
-            "Rebases every series to 100 at its first close in the window, so symbols at "
-            "very different price levels are comparable on a single shared axis. This is "
-            "deliberately used instead of a second y-axis: two independent y-scales let "
-            "you manufacture any apparent correlation by choosing the scales."
+            "**What it does.** Rebases every series to 100 at its first close inside the "
+            "window, so a $30 stock and a $600 stock are directly comparable.\n\n"
+            "**Why it exists.** Raw prices can't be compared — a $5 move means something "
+            "different at $30 than at $600. Rebasing converts levels into *growth*, "
+            "which is the comparable quantity.\n\n"
+            "**Why not a second y-axis.** A dual-axis chart is the obvious alternative "
+            "and it's the wrong one: two independent scales can be aligned to imply any "
+            "correlation you like. Rebasing puts everything on **one** axis, so the "
+            "comparison is honest by construction.\n\n"
+            "**How it works.** A CTE finds each symbol's first in-window close as its "
+            "base, then the main query returns `100 * close / base` per row. The "
+            "arithmetic stays in SQL; Python only pivots the tidy result into "
+            "date × symbol for plotting."
         ),
     },
-    "Window stats (KPI row)": {
+    "Headline metrics for one company": {
+        "question": "What are the key statistics for one company over a chosen window?",
         "sql": WINDOW_STATS,
         "params": ["symbol", "start", "end"],
+        "read_path": "Indexed scan",
+        "read_path_note": "Single symbol, single pass",
+        "indexes": ["idx_prices_symbol_date (symbol, date)"],
+        "objects": ["prices", "daily_returns", "drawdowns"],
+        "powers": [
+            "Overview → KPI row",
+            "Companies → Company metric cards",
+            "Risk → Risk metric cards",
+        ],
         "explain": (
-            "One query behind the whole KPI row. Volatility comes from the variance "
-            "identity E[r²] − E[r]², annualized by √252; max drawdown comes from the "
-            "`drawdowns` view; CAGR is geometric over actual elapsed calendar time via "
-            "`julianday`. Everything is scoped to the selected window so the cards can "
-            "never disagree with the charts below them."
+            "**What it does.** Returns the whole KPI row — period return, CAGR, high and "
+            "low, average volume and dollar turnover, annualized volatility and worst "
+            "drawdown — in a single query.\n\n"
+            "**Why one query.** If the cards were computed separately they could "
+            "disagree with each other or with the charts beneath them. One query over "
+            "one window makes that impossible.\n\n"
+            "**How it works.** Volatility uses the variance identity "
+            "`E[r²] − E[r]²`, annualized by `√252` (the approximate number of trading "
+            "days in a year). CAGR is geometric over actual elapsed time via "
+            "`julianday`. Max drawdown comes from the `drawdowns` view.\n\n"
+            "**Why investors care.** Return alone is half the picture. Volatility and "
+            "drawdown describe the ride — a 30% CAGR through a 90% drawdown is a very "
+            "different proposition from the same return earned smoothly."
         ),
     },
-    "Moving averages (50 / 200 session)": {
+    "Trend indicators": {
+        "question": "Is a company trading above or below its long-term trend?",
         "sql": MOVING_AVERAGES_IN_RANGE,
         "params": ["symbol", "start", "end"],
+        "read_path": "View over window functions",
+        "read_path_note": "Rolling frames, computed on read",
+        "indexes": ["idx_prices_symbol_date (symbol, date)"],
+        "objects": ["moving_averages (view)", "prices"],
+        "powers": ["Companies → Moving averages chart"],
         "explain": (
-            "Rolling means over trailing 50- and 200-session frames. The `CASE WHEN "
-            "COUNT(*) OVER w = N` guard returns NULL until the frame is actually full, "
-            "so the early part of a series shows no line rather than a misleading "
-            "average computed from fewer sessions than the label claims."
+            "**What it does.** Returns the closing price alongside its trailing 50- and "
+            "200-session moving averages.\n\n"
+            "**Why investors care.** These two are the most watched trend indicators in "
+            "markets. Price above the 200-day is broadly read as an uptrend, and the "
+            "50-day crossing the 200-day has its own well-known names.\n\n"
+            "**How it works.** `AVG(close) OVER (PARTITION BY symbol ORDER BY date ROWS "
+            "BETWEEN 49 PRECEDING AND CURRENT ROW)` — the frame clause defines the "
+            "window; no self-join needed.\n\n"
+            "**The detail that matters.** Each average is wrapped in "
+            "`CASE WHEN COUNT(*) OVER w = N`, returning NULL until the frame is "
+            "genuinely full. Without that guard a '200-day average' would silently be a "
+            "30-day average for the first 200 rows — a label claiming more than the "
+            "arithmetic supports."
         ),
     },
-    "Cumulative return (log-sum compounding)": {
+    "Growth of an investment": {
+        "question": "What would an investment have grown to over this period?",
         "sql": CUMULATIVE_RETURN_IN_RANGE,
         "params": ["symbol", "start", "end"],
+        "read_path": "View + window function",
+        "read_path_note": "Log-sum compounding",
+        "indexes": ["idx_prices_symbol_date (symbol, date)"],
+        "objects": ["daily_returns (view)"],
+        "powers": ["Companies → Cumulative return chart"],
         "explain": (
-            "Compounds daily returns with `EXP(SUM(LN(1+r)) OVER (ORDER BY date)) - 1`. "
-            "Summing logs then exponentiating is the running product of (1+r) — true "
-            "compounding, not a cumulative sum of percentages, which would drift."
+            "**What it does.** Compounds daily returns into a running growth curve "
+            "starting at 0%.\n\n"
+            "**How it works.** "
+            "`EXP(SUM(LN(1 + daily_return)) OVER (ORDER BY date)) - 1`. Summing "
+            "logarithms and then exponentiating is the running *product* of "
+            "`(1 + r)` — which is what compounding is.\n\n"
+            "**The bug this avoids.** The intuitive version is a cumulative *sum* of "
+            "daily percentages. It's wrong, and it drifts further the longer the window: "
+            "+10% then −10% is −1%, not 0%. Over 6,000 trading days the error is "
+            "enormous. Doing it in log space is both correct and numerically stable."
         ),
     },
-    "Rolling volatility (21 sessions)": {
+    "Risk over time": {
+        "question": "How volatile has a company been, and when did that change?",
         "sql": VOLATILITY_IN_RANGE,
         "params": ["symbol", "start", "end"],
+        "read_path": "View over window functions",
+        "read_path_note": "21-session rolling frame",
+        "indexes": ["idx_prices_symbol_date (symbol, date)"],
+        "objects": ["rolling_volatility (view)", "daily_returns (view)"],
+        "powers": [
+            "Companies → Rolling volatility chart",
+            "Risk → Rolling volatility chart",
+        ],
         "explain": (
-            "Standard deviation of daily returns over a trailing 21-session window "
-            "(about one trading month), annualized by √252. Computed in SQL from the "
-            "same variance identity, and NULL until the window is full."
+            "**What it does.** Standard deviation of daily returns over a trailing "
+            "21-session window — about one trading month — annualized by `√252`.\n\n"
+            "**Why investors care.** A single volatility number for 25 years hides "
+            "everything interesting. The rolling version shows *when* risk arrived: the "
+            "2008 crisis and March 2020 both appear as unmistakable spikes.\n\n"
+            "**How it works.** Same variance identity as the KPI query, but inside a "
+            "moving frame, and NULL until the window is full so early values aren't "
+            "computed from fewer observations than the label implies.\n\n"
+            "**Why √252.** Variance scales with time, so standard deviation scales with "
+            "its square root; 252 is the conventional count of trading days per year."
         ),
     },
-    "Calendar-year summary": {
+    "Yearly track record": {
+        "question": "How has the market performed year by year?",
         "sql": YEARLY_SUMMARY,
         "params": ["symbol"],
+        "read_path": "View + grouped joins",
+        "read_path_note": "Per-year bounds and aggregates",
+        "indexes": ["idx_prices_symbol_date (symbol, date)"],
+        "objects": ["yearly_summary (view)", "prices"],
+        "powers": [
+            "Performance → Calendar-year returns chart",
+            "Performance → Partial-year flagging",
+        ],
         "explain": (
-            "Per-year open/close/high/low, average volume and return. A US equity year "
-            "runs ~250 sessions, so any year with fewer is flagged `is_partial` — the "
-            "first and last years of a 25-year window are partial, and the UI fades them "
-            "because a part-year figure is not a calendar-year return."
+            "**What it does.** Per-year open, close, high, low, average volume and "
+            "return, plus a flag marking years the dataset only partly covers.\n\n"
+            "**Why the flag matters.** A 25-year window starts and ends mid-year, so the "
+            "first and last calendar years are incomplete. Showing a July-to-December "
+            "figure beside twelve full years, both labelled 'annual return', is simply "
+            "wrong. The view counts sessions and flags any year under 240 — a US equity "
+            "year has ~250 — and the UI fades and asterisks those bars.\n\n"
+            "**How it works.** A bounds CTE finds each year's first and last session, an "
+            "aggregate CTE computes high/low/volume, and the two join back to `prices` "
+            "for the closes on those exact dates."
         ),
     },
 }
