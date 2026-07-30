@@ -365,3 +365,27 @@ def sector_bars(df, pal: dict, *, height: int = 340) -> go.Figure:
     fig.update_yaxes(showgrid=False, tickfont=dict(color=pal["text_secondary"], size=11.5))
     fig.add_vline(x=0, line_color=pal["baseline"], line_width=1)
     return fig
+
+
+def multi_series(frames: dict, pal: dict, *, value_col: str, y_title: str,
+                 height: int = 400, tickformat: str | None = None,
+                 zero_line: bool = False, hover_fmt: str = ",.2f") -> go.Figure:
+    """Overlay one metric across several symbols on ONE shared axis.
+
+    `frames` maps symbol -> DataFrame with `date` and `value_col`. Colors come
+    from the categorical slots in the caller's order, so a symbol keeps its color
+    when the selection changes -- identity follows the entity, not its rank.
+    """
+    fig = go.Figure()
+    for i, (sym, df) in enumerate(frames.items()):
+        if df is None or df.empty or value_col not in df.columns:
+            continue
+        s = df.dropna(subset=[value_col])
+        fig.add_trace(go.Scatter(
+            x=s["date"], y=s[value_col], mode="lines", name=str(sym),
+            line=dict(color=pal["series"][i % len(pal["series"])], width=2),
+            hovertemplate="<b>%{y:" + hover_fmt + "}</b><extra>" + str(sym) + "</extra>",
+        ))
+    fig = style(fig, pal, y_title=y_title, height=height, legend=True,
+                y_tickformat=tickformat, zero_line=zero_line)
+    return fig

@@ -209,3 +209,26 @@ def indexed_comparison(symbols: tuple[str, ...], start: str, end: str) -> pd.Dat
     # Preserve the caller's order so colors follow the entity, not sort order.
     ordered = [s for s in symbols if s in pivot.columns]
     return pivot[ordered]
+
+
+@st.cache_data(ttl=TTL, show_spinner=False)
+def comparison_frames(symbols: tuple[str, ...], start: str, end: str, metric: str) -> dict:
+    """One frame per symbol for a comparable metric, keyed by symbol.
+
+    Kept in the data layer so the page stays layout-only, and cached as a unit
+    because a comparison redraws whenever the selection changes.
+    """
+    loaders = {
+        "Cumulative return": (cumulative_return, "cumulative_return"),
+        "Drawdown": (drawdowns, "drawdown"),
+        "Rolling volatility": (volatility, "ann_volatility_21d"),
+        "Daily returns": (daily_returns, "daily_return"),
+        "Volume": (prices, "volume"),
+    }
+    loader, col = loaders[metric]
+    out = {}
+    for sym in symbols:
+        df = loader(sym, start, end)
+        if df is not None and not df.empty:
+            out[sym] = df[["date", col]]
+    return out

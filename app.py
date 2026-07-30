@@ -287,6 +287,7 @@ if not DEV and section == "Market":
         ui.data_table(
             tbl, key="movers",
             search_cols=("Ticker", "Company", "Sector"),
+        filter_cols=("Sector",),
             sort_options={"Return": "Return", "Avg $ volume": "Avg $ vol",
                           "Ticker": "Ticker", "Company": "Company"},
             default_sort="Return",
@@ -418,6 +419,22 @@ if not DEV and section == "Companies":
                     key="co_vola", config=PLOT_CONFIG, controls=False,
                 )
 
+        ui.section("Drawdown", "How far below its previous high the price sat")
+        cdd = dal.drawdowns(sym, cs, ce)
+        if not cdd.empty:
+            fig_dd = charts.area_series(cdd, "drawdown", pal, color_key="red",
+                                        y_title="Drawdown", height=300, tickformat=".0%")
+            worst_c = cdd.loc[cdd["drawdown"].idxmin()]
+            fig_dd.add_annotation(
+                x=worst_c["date"], y=worst_c["drawdown"],
+                text=f"{worst_c['drawdown'] * 100:.1f}% · {pd.to_datetime(worst_c['date']):%b %Y}",
+                showarrow=True, arrowhead=0, arrowcolor=pal["muted"], ax=0, ay=-26,
+                font=dict(color=pal["text_primary"], size=11.5),
+            )
+            charts.add_events(fig_dd, pal, events.in_range(cs, ce), label=False)
+            ui.chart(fig_dd, key="co_dd", config=PLOT_CONFIG, controls=False,
+                     caption="Measured from the running all-time high — the loss an investor sat through")
+
         # ---- comparison ----
         ui.section("Comparison", "Rebased to 100 at the window start — one shared axis")
         default_cmp = [s for s in (sym, "MSFT", INDEX_SYMBOL) if s in set(directory["symbol"])]
@@ -427,8 +444,42 @@ if not DEV and section == "Companies":
             key="cmp_syms", max_selections=8,
             help="Up to 8. Each keeps its own color as the selection changes.",
         )
+        cmp_metric = st.radio(
+            "Compare on", ["Price (rebased)", "Cumulative return", "Drawdown",
+                           "Rolling volatility", "Daily returns", "Volume"],
+            horizontal=True, key="cmp_metric", label_visibility="collapsed",
+        )
+
         if len(cmp_syms) < 2:
             ui.note("Pick at least two symbols to compare.")
+        elif cmp_metric != "Price (rebased)":
+            # Every other metric is already unit-comparable across companies
+            # (percentages, or share counts), so it overlays directly -- still on
+            # one shared axis, never a second y-scale.
+            spec = {
+                "Cumulative return": ("cumulative_return", "Cumulative return", ".0%", ".1%", True),
+                "Drawdown":          ("drawdown", "Drawdown", ".0%", ".1%", True),
+                "Rolling volatility": ("ann_volatility_21d", "Ann. volatility", ".0%", ".1%", False),
+                "Daily returns":     ("daily_return", "Daily return", ".1%", ".2%", True),
+                "Volume":            ("volume", "Volume", None, ",.0f", False),
+            }[cmp_metric]
+            col, title, tickfmt, hoverfmt, zline = spec
+            frames = dal.comparison_frames(tuple(cmp_syms), START, END, cmp_metric)
+            if not frames:
+                ui.note("No data for that selection in this window.")
+            else:
+                fig_m = charts.multi_series(
+                    frames, pal, value_col=col, y_title=title, height=400,
+                    tickformat=tickfmt, zero_line=zline, hover_fmt=hoverfmt,
+                )
+                charts.add_events(fig_m, pal, events.in_range(START, END), label=False)
+                ui.chart(fig_m, key=f"co_cmp_{col}", config=PLOT_CONFIG,
+                         caption=f"{cmp_metric} for {len(frames)} symbols on one shared axis")
+                ui.note(
+                    "These metrics are already comparable across companies, so they "
+                    "overlay directly. A second y-axis is never used: two independent "
+                    "scales can be aligned to imply any relationship you like."
+                )
         else:
             pivot = dal.indexed_comparison(tuple(cmp_syms), START, END)
             if pivot.empty:
@@ -500,6 +551,7 @@ if not DEV and section == "Performance":
     ui.data_table(
         disp, key="perf",
         search_cols=("Ticker", "Company", "Sector"),
+        filter_cols=("Sector",),
         sort_options={
             "CAGR": "CAGR", "Total return": "Total", "Volatility": "Vol",
             "Max drawdown": "MaxDD", "Years": "Years", "Ticker": "Ticker",

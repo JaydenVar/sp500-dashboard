@@ -247,6 +247,7 @@ def data_table(
     key: str,
     column_config: dict | None = None,
     search_cols: tuple[str, ...] = (),
+    filter_cols: tuple[str, ...] = (),
     sort_options: dict[str, str] | None = None,
     default_sort: str | None = None,
     page_size_options: tuple[int, ...] = (10, 25, 50),
@@ -288,6 +289,21 @@ def data_table(
             if col in view.columns:
                 mask |= view[col].astype(str).str.lower().str.contains(t, na=False, regex=False)
         view = view[mask]
+
+    # Column filters: multiselect per low-cardinality text column (Sector,
+    # Industry...). Only offered where the distinct count is small enough that a
+    # picker beats typing -- a filter with 49 options is just a worse search box.
+    if filter_cols:
+        fcols = [c for c in filter_cols if c in df.columns and 2 <= df[c].nunique() <= 25]
+        if fcols:
+            with st.expander(f"Filters ({len(fcols)})"):
+                cols_ui = st.columns(min(len(fcols), 3))
+                for i, col in enumerate(fcols):
+                    with cols_ui[i % len(cols_ui)]:
+                        opts = sorted(df[col].dropna().astype(str).unique())
+                        chosen = st.multiselect(col, opts, key=f"{key}_f_{col}")
+                        if chosen:
+                            view = view[view[col].astype(str).isin(chosen)]
 
     if sort_options and sort_key:
         col = sort_options[sort_key]
