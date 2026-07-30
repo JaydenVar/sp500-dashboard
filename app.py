@@ -22,6 +22,8 @@ import datetime as dt
 import pandas as pd
 import streamlit as st
 
+import answers
+import ask
 import charts
 import components as ui
 import data_access as dal
@@ -144,6 +146,37 @@ if DEV:
 # Overview — the index
 # ---------------------------------------------------------------------------
 if not DEV and section == "Overview":
+    # Ask the Market -- natural language routed to real queries. No LLM: intents
+    # are keyword-scored and answered from the same SQL the rest of the app uses,
+    # so an answer can never disagree with the page beside it.
+    asked = st.text_input(
+        "Ask the Market", key="ask_q", label_visibility="collapsed",
+        placeholder="Ask the Market…  e.g. “What stock had the highest trading volume?”",
+    )
+    ex_cols = st.columns(len(ask.EXAMPLES))
+    for i_e, ex in enumerate(ask.EXAMPLES):
+        with ex_cols[i_e]:
+            if st.button(ex, key=f"ask_ex_{i_e}", use_container_width=True):
+                st.session_state.ask_q = ex
+                st.rerun()
+
+    if asked and asked.strip():
+        intent, syms, yr = ask.match(asked, directory)
+        if intent is None:
+            st.info(
+                "I couldn't match that to a question I can answer yet. Try one of "
+                "the suggestions above, or name a company."
+            )
+        else:
+            a_start, a_end = START, END
+            a_preset = preset
+            if yr:  # "since 2020" overrides the window for this answer
+                y_start = dt.date(yr, 1, 1)
+                if index_min <= y_start <= end_d:
+                    a_start, a_preset = y_start.isoformat(), f"since {yr}"
+            answers.HANDLERS[intent.handler](directory, pal, a_start, a_end, syms, a_preset)
+        st.divider()
+
     q = dal.quote(INDEX_SYMBOL)
     ws = dal.window_stats(INDEX_SYMBOL, START, END)
     px = dal.prices(INDEX_SYMBOL, START, END)

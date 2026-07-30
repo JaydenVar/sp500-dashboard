@@ -209,6 +209,19 @@ hr {{ border-color: var(--border); margin: 1.25rem 0; }}
 .q-price {{ font-size: 2.05rem; font-weight: 680; line-height: 1; letter-spacing: -0.03em; }}
 .q-chg {{ font-size: 0.95rem; font-weight: 650; margin-left: 2px; }}
 
+/* ---------- ask the market ---------- */
+.answer {{
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: 10px;
+  padding: 15px 18px;
+  margin: 4px 0 12px;
+  font-size: 1.04rem; line-height: 1.5; color: var(--text-1);
+  box-shadow: var(--shadow);
+}}
+.st-key-ask_q input {{ font-size: 1rem !important; padding: 10px 14px !important; }}
+
 /* ---------- developer center ---------- */
 .qbox {{
   background: linear-gradient(135deg, {p['hover']}, transparent 70%);
