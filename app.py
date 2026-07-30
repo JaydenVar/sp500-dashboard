@@ -48,22 +48,79 @@ MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", 
 # Date presets. Value is (label -> lookback in days | sentinel).
 PRESETS: dict[str, object] = {
     "1M": 30, "3M": 91, "6M": 182, "YTD": "ytd",
-    "1Y": 365, "3Y": 1095, "5Y": 1826, "10Y": 3653, "MAX": "max",
+    "1Y": 365, "3Y": 1095, "5Y": 1826, "10Y": 3653,
+    "All Time": "all", "Custom Range": "custom",
 }
-DEFAULT_PRESET = "MAX"
+DEFAULT_PRESET = "All Time"
+CUSTOM_PRESET = "Custom Range"
+
+# The sections that actually read the window. Performance is all-time by
+# construction (each symbol over its own listed history, calendar-year returns,
+# seasonality) and About states no figures at all -- so the control row must not
+# claim to scope them. The window is deliberately shared by the rest: moving
+# between Market and Companies keeps every figure describing the same period,
+# which is what makes reading across sections trustworthy.
+WINDOWED_SECTIONS = ("Overview", "Market", "Companies", "Risk", "Portfolio")
 
 
 def resolve_range(preset: str, min_d: dt.date, max_d: dt.date) -> tuple[dt.date, dt.date]:
-    if preset == "max":
-        return min_d, max_d
-    if preset == "ytd":
-        return max(dt.date(max_d.year, 1, 1), min_d), max_d
-    spec = PRESETS.get(preset, "max")
-    if spec == "max":
+    """Preset label (or bare sentinel) -> window, clamped to the available data.
+
+    Relative windows run back from the newest session in the data rather than
+    from today, so "1Y" is the last year the market traded -- the two differ
+    every weekend and after every holiday.
+    """
+    spec = PRESETS.get(preset, preset)
+    # "max" is the old label for All Time. A browser session that survived a
+    # Streamlit Cloud hot-update can still be holding it (see the deploy hazard
+    # in PROJECT_STATE), so it stays an accepted alias rather than falling
+    # through to an empty window.
+    if spec in ("all", "max", "custom"):
         return min_d, max_d
     if spec == "ytd":
         return max(dt.date(max_d.year, 1, 1), min_d), max_d
-    return max(max_d - dt.timedelta(days=int(spec)), min_d), max_d
+    try:
+        days = int(spec)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return min_d, max_d
+    return max(max_d - dt.timedelta(days=days), min_d), max_d
+
+
+def custom_window(min_d: dt.date, max_d: dt.date) -> tuple[dt.date, dt.date]:
+    """Start/end pickers for Custom Range, validated before anything queries it.
+
+    Both fields are bounded by the data, so the failure a reader can actually
+    produce is a reversed pair -- and SQLite answers `BETWEEN '2020' AND '2010'`
+    with zero rows, which would surface as "No data in the selected window" on
+    every section at once: an input error wearing the costume of a data gap. It
+    is caught here instead, and the last valid window is held.
+    """
+    last_ok = st.session_state.get("custom_window", (min_d, max_d))
+    cols = st.columns([1.3, 1.3, 3.4])
+    with cols[0]:
+        picked_s = st.date_input(
+            "Start date", value=last_ok[0], min_value=min_d, max_value=max_d,
+            key="custom_start", format="YYYY-MM-DD",
+        )
+    with cols[1]:
+        picked_e = st.date_input(
+            "End date", value=last_ok[1], min_value=min_d, max_value=max_d,
+            key="custom_end", format="YYYY-MM-DD",
+        )
+
+    # A cleared field yields None; hold the last good window rather than
+    # comparing None against a date.
+    if picked_s is None or picked_e is None:
+        return last_ok
+    if picked_s > picked_e:
+        st.error(
+            f"Start date ({picked_s:%b %d, %Y}) is after the end date "
+            f"({picked_e:%b %d, %Y}). Showing the previous range."
+        )
+        return last_ok
+
+    st.session_state["custom_window"] = (picked_s, picked_e)
+    return picked_s, picked_e
 
 
 def use_example(text: str) -> None:
@@ -101,6 +158,12 @@ ui.header(
 # ---------------------------------------------------------------------------
 ctl = st.columns([4.0, 1.5, 1.9])
 with ctl[0]:
+    # Drop a stored preset that is no longer offered before the widget is built.
+    # st.radio raises on a session_state value outside its options, and a session
+    # that survived a hot-update can still hold the old "MAX" label. Writing a
+    # widget key is only forbidden AFTER the widget exists -- here it does not yet.
+    if "preset" in st.session_state and st.session_state["preset"] not in PRESETS:
+        del st.session_state["preset"]
     preset = st.radio(
         "Date range", list(PRESETS), index=list(PRESETS).index(DEFAULT_PRESET),
         horizontal=True, key="preset", label_visibility="collapsed",
@@ -123,15 +186,27 @@ with ctl[2]:
 DEV = mode == "Developer"
 
 index_min, index_max = dal.date_bounds(INDEX_SYMBOL)
-start_d, end_d = resolve_range(preset, index_min, index_max)
+if preset == CUSTOM_PRESET:
+    start_d, end_d = custom_window(index_min, index_max)
+else:
+    start_d, end_d = resolve_range(preset, index_min, index_max)
 START, END = start_d.isoformat(), end_d.isoformat()
 
+# Name the sections this window reaches. It previously read "scopes every section
+# below", which was false for two of the seven: Performance is all-time and About
+# has no figures to scope. A control that overstates its reach makes a reader
+# distrust the ones it does govern.
+_named = f"{', '.join(WINDOWED_SECTIONS[:-1])} and {WINDOWED_SECTIONS[-1]}"
+scope_note = (
+    "seeds the SQL Explorer window" if DEV
+    else f"applies to {_named} · Performance and About are always all-time"
+)
 st.markdown(
     f'<div class="note">'
     f'<span class="modepill{" dev" if DEV else ""}">'
     f'{"◆ Developer Center" if DEV else "● User Mode"}</span>'
     f'&nbsp;&nbsp;Window <b>{start_d:%b %d, %Y}</b> → <b>{end_d:%b %d, %Y}</b>'
-    f' · {preset} · scopes every section below</div>',
+    f' · {preset} · {scope_note}</div>',
     unsafe_allow_html=True,
 )
 
@@ -313,7 +388,7 @@ if not DEV and section == "Market":
             sort_options={"Return": "Return", "Avg $ volume": "Avg $ vol",
                           "Ticker": "Ticker", "Company": "Company"},
             default_sort="Return",
-            csv_name=f"movers_{preset}.csv",
+            csv_name=f"movers_{preset.lower().replace(' ', '_')}.csv",
             column_config={
                 "Return": st.column_config.NumberColumn("Return", format="%+.2f%%",
                                                         help="Close-to-close over the window"),
