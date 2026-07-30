@@ -23,6 +23,8 @@ from dataclasses import dataclass, field
 
 import pandas as pd
 
+from universe import INDEX_SYMBOL
+
 # Words that are never useful signal when matching a company name.
 _STOP = {
     "the", "a", "an", "and", "or", "vs", "versus", "compare", "comparison",
@@ -50,14 +52,24 @@ INTENTS: list[Intent] = [
            (("volume", "traded", "trading", "liquid", "turnover"),
             ("most", "highest", "biggest", "largest", "top")),
            "top_volume", "What stock had the highest trading volume?"),
+    # "Which stocks returned the most" is the single most common shape a person
+    # types, and it names no winner/gainer word at all -- the vocabulary here is
+    # deliberately wide because this is the tier the app runs on with no API key.
     Intent("biggest_winners",
            (("winner", "winners", "gainer", "gainers", "best", "grew", "growth",
-             "rose", "up", "performer", "performers"),),
+             "rose", "up", "performer", "performers", "performing", "performance",
+             "return", "returns", "returned", "gain", "gains", "gained",
+             "outperform", "outperformed", "leader", "leaders", "leaderboard",
+             "rank", "ranked", "ranking", "top"),),
            "top_gainers", "Show me the biggest winners since 2020."),
+    # Weighted just above the winners so a question carrying both a performance
+    # word and an explicit negative one ("bottom 5 performers") reads as a loss
+    # question rather than losing a tie to whichever intent is listed first.
     Intent("biggest_losers",
            (("loser", "losers", "decliner", "decliners", "worst", "fell",
-             "dropped", "down"),),
-           "top_losers", "Which companies performed worst?"),
+             "dropped", "down", "lost", "lose", "loses", "declined",
+             "underperform", "underperformed", "bottom"),),
+           "top_losers", "Which companies performed worst?", weight=1.1),
     Intent("biggest_drawdown",
            (("drawdown", "crash", "collapse", "fell furthest", "decline"),
             ("biggest", "largest", "worst", "deepest", "most")),
@@ -75,15 +87,22 @@ INTENTS: list[Intent] = [
     Intent("compare",
            (("compare", "versus", "vs", "against", "difference between"),),
            "compare", "Compare Apple and Microsoft.", needs_symbols=2, weight=1.6),
+    # Shares the performance vocabulary with the ranking intents on purpose: the
+    # +/- symbol adjustment in `match` is what separates them. "How much did
+    # Apple return" names a company and wins here; "highest return over 10 years"
+    # names none, takes the penalty, and falls to the ranking intent.
     Intent("company_detail",
-           (("how did", "tell me about", "performance of", "about"),),
+           (("how did", "tell me about", "performance of", "about", "perform",
+             "performed", "performance", "return", "returns", "returned",
+             "doing", "done"),),
            "company_detail", "How did Nvidia perform?", needs_symbols=1),
     Intent("sector",
            (("sector", "sectors", "industry group"),),
            "sector", "Which sector performed best?", weight=1.3),
     Intent("market_summary",
            (("market", "overall", "index", "s&p", "sp500", "summary", "breadth"),),
-           "market_summary", "How has the market done overall?"),
+           "market_summary", "How has the market done overall?",
+           extras={"index_bonus": 2.0}),
 ]
 
 EXAMPLES = [
@@ -170,6 +189,12 @@ def match(text: str, directory: pd.DataFrame) -> tuple[Intent | None, list[str],
             score += 1.5
         elif intent.needs_symbols:
             score -= 1.0
+        # Naming the index and nothing else is a question about the market, not
+        # about a company that happens to be listed. Without this, "the average
+        # annual return of the S&P 500" scores as a company question, because
+        # ^GSPC is a row in the directory like any other.
+        if symbols == [INDEX_SYMBOL]:
+            score += intent.extras.get("index_bonus", 0.0)
         if score > best_score:
             best, best_score = intent, score
 

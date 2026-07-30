@@ -107,6 +107,38 @@ r = router.route("Compare Apple and Microsoft.", d, **UI)
 check("degraded to keywords", r.intent is not None and r.intent.source == "keywords")
 check("symbols still resolved", r.symbols == ["AAPL", "MSFT"], r.symbols)
 
+print("=== keyword tier covers the plain business questions ===")
+# The deployed app has no API key, so this tier answers every question. A miss
+# here is a user seeing "I couldn't match that" for a question the app can in
+# fact answer -- these are the phrasings that used to fall through.
+reset()
+nlq.available = lambda: False
+nlq.extract = lambda q, dd: None
+for question, expected in [
+    ("highest return over 10 years",              "top_gainers"),
+    ("which company returned the most since 2010", "top_gainers"),
+    ("what were the top performing stocks last year", "top_gainers"),
+    ("rank companies by return",                  "top_gainers"),
+    ("give me the leaderboard",                   "top_gainers"),
+    ("top 5 technology companies over 3 years",   "top_gainers"),
+    ("which stock lost the most money",           "top_losers"),
+    ("bottom 5 performers",                       "top_losers"),
+    # A named company plus a performance word is about that company, and the
+    # index named alone is about the market -- both share the same vocabulary
+    # as the ranking intents and are separated only by the symbols found.
+    ("how much did Apple return",                 "company_detail"),
+    ("average annual return of the S&P 500",      "market_summary"),
+    # Unchanged by the widened vocabulary; here so a future widening can't
+    # quietly swallow the more specific intents.
+    ("What stock had the highest trading volume?", "top_volume"),
+    ("Which sector performed best?",              "sector"),
+    ("Which stock has been the most volatile?",   "most_volatile"),
+    ("What company had the biggest drawdown?",    "biggest_drawdown"),
+]:
+    r = router.route(question, d, **UI)
+    got = r.template.handler if r.template else f"UNMATCHED ({r.path})"
+    check(f"{question!r} -> {expected}", got == expected, got)
+
 print()
 print("FAILURES:", fails)
 sys.exit(1 if fails else 0)

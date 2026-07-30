@@ -80,7 +80,7 @@ def use_example(text: str) -> None:
 # Theme + chrome
 # ---------------------------------------------------------------------------
 if "theme" not in st.session_state:
-    st.session_state.theme = "Light"
+    st.session_state.theme = "Dark"
 
 pal = PALETTES[st.session_state.theme]
 st.markdown(app_css(pal), unsafe_allow_html=True)
