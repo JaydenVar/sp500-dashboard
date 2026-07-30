@@ -1,10 +1,14 @@
-# Market Analytics — a SQL-first equity dashboard
+# Market Analytics — a SQL-first equity platform
 
 25 years of daily history for the S&P 500 index and 49 large-cap US equities.
 **Every figure on screen is the output of a SQL query** — the analysis lives in
-SQLite views and materialized rollups, and Python only queries and draws. The
-built-in **SQL Explorer** page proves it: pick any query and see the SQL, an
-explanation of what it does, the rows it returns, and its measured runtime.
+SQLite views and materialized rollups, and Python only queries and draws.
+
+The app ships as **two separate experiences**: a *User Mode* that behaves like a
+financial product, and a *Developer Center* documenting the engineering behind
+it. The **SQL Explorer** there presents each query as the business question it
+answers, with the code one click away — and **Interview Mode** answers the
+questions an interviewer actually asks.
 
 ## Setup
 
@@ -27,20 +31,58 @@ CSVs. To refresh the market data:
 ./.venv/bin/python build_db.py      # rebuild the SQLite database
 ```
 
-## Sections
+## Two modes
+
+The app deliberately separates the product from the engineering. Toggle in the
+top-right.
+
+**User Mode** — a financial application. No SQL, schemas or query timings appear
+anywhere.
 
 | Section | What's in it |
 |---|---|
-| **Overview** | S&P 500 quote strip, KPI row, index level (linear/log), volume |
-| **Market** | Breadth (advancing/declining), sector performance, full movers table |
-| **Companies** | Ticker/name search, company overview, price + MAs + volume + returns + cumulative return + rolling volatility, and multi-symbol comparison |
+| **Overview** | *Ask the Market* search, index quote, KPIs, price with market events, volume |
+| **Market** | Breadth, sector performance, full movers table |
+| **Companies** | Ticker/name search, company page, price, moving averages, volume, returns, cumulative return, volatility, drawdown, and multi-metric comparison |
 | **Performance** | Long-run leaderboard, calendar-year returns, monthly seasonality |
 | **Risk** | Drawdown curve, rolling volatility, risk-vs-return scatter |
-| **SQL Explorer** | Every query, explained, with live timings and the schema |
-| **About** | Architecture and an honest account of the data's limits |
+| **Portfolio** | Weighted basket simulator with return, CAGR, volatility and drawdown |
+| **About** | What the metrics mean and the limitations that affect reading them |
 
-Controls sit in one row above everything they scope: date presets
-(1M / 3M / 6M / YTD / 1Y / 3Y / 5Y / 10Y / MAX), a light/dark toggle, and Reset view.
+**Developer Center** — everything technical, organized for someone evaluating
+the engineering: Overview, Project Architecture, Database Schema, SQL Explorer,
+Performance, Technology Stack, **Interview Mode**, About the Project.
+
+### Ask the Market
+
+A natural-language search bar answering questions like *"What stock had the
+highest trading volume?"*, *"Compare Apple and Microsoft"*, or *"What company had
+the biggest drawdown?"*.
+
+No LLM: eleven intents are keyword-scored and answered by the same queries the
+rest of the app runs, so an answer can never disagree with the page beside it.
+Intents are scored rather than first-matched, symbols resolve by ticker *or*
+company name, and unmatched input says so instead of guessing.
+
+### Portfolio simulator
+
+Build a weighted basket and see what it would have done. The arithmetic is SQL:
+a weighted portfolio's daily return is the weighted average of its holdings',
+wealth compounds by log-sum, and drawdown comes from a running peak.
+
+Verified to 1e-9 against an independent pandas recomputation across four
+scenarios — including one mixing 2001, 2010 and 2012 listings, which exposed a
+real bug: the investable date is the first session where every holding has a
+*price*, not a *return*.
+
+Modelling assumptions are stated in the UI: rebalanced to target weights daily,
+only sessions where every holding traded, dividends excluded.
+
+### Market timeline
+
+Twelve market-defining sessions — the dot-com bottom, Lehman, the 2009 trough,
+the COVID crash and recovery, the inflation cycle — overlay the charts with hover
+explanations, so a 25-year chart explains its own craters.
 
 ## Architecture
 
@@ -50,7 +92,11 @@ build_db.py     CSVs  ->  SQLite: tables, views, materialized rollups
 queries.py      every SQL statement, each paired with an explanation
 data_access.py  cached query layer (st.cache_data) — the only place SQL is run
 charts.py       Plotly builders + one shared styling function
-components.py   header, KPI cards, quote strip, sortable/paginated table
+components.py   header, KPI cards, quote strip, chart + table helpers
+events.py       market timeline events with hover explanations
+ask.py          natural-language intent routing (no LLM)
+answers.py      renders an answer per intent from existing queries
+devcenter.py    the Developer Center, incl. SQL Explorer and Interview Mode
 theme.py        validated palettes and the whole stylesheet
 app.py          layout and interaction only — no analysis
 ```
