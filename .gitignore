@@ -10,3 +10,4 @@ data/prices.csv
 # Per-symbol fetch cache: 33MB that only exists to make a rate-limited
 # fetch_data.py run resumable. Regenerated on demand.
 data/cache/
+data/*.db.building

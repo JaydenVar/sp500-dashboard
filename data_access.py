@@ -22,8 +22,13 @@ TTL = 3600  # data is a static daily snapshot; an hour is plenty
 
 @st.cache_resource(show_spinner=False)
 def ensure_db() -> str:
-    """Build the DB from the committed CSVs if absent (fresh deploy). Runs once."""
-    if not DB_PATH.exists():
+    """Build the DB from the committed CSVs unless a CURRENT one already exists.
+
+    Checks the schema stamp rather than mere file existence: a deploy container
+    keeps its disk across restarts, so a database left by an older schema would
+    otherwise be reused forever and every query would fail with `no such table`.
+    """
+    if not build_db.db_is_current(DB_PATH):
         build_db.main()
     return str(DB_PATH)
 

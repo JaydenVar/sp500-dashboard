@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import csv
 import gzip
+import os
 import sqlite3
 from pathlib import Path
 
@@ -18,6 +19,19 @@ PRICES_GZ = DATA_DIR / "prices.csv.gz"
 PRICES_CSV = DATA_DIR / "prices.csv"  # accepted if present, but not what ships
 SYMBOLS_CSV = DATA_DIR / "symbols.csv"
 DB_PATH = DATA_DIR / "sp500.db"
+
+# Bump when the schema changes. A deployed container keeps its disk between
+# restarts, so a database built by an OLDER version of this file survives and
+# would otherwise be reused forever -- which is exactly how a single-symbol
+# database (no `symbols` table) kept breaking the multi-symbol app. The stamp
+# plus the object check below make a stale database rebuild itself.
+SCHEMA_VERSION = 2
+
+REQUIRED_OBJECTS = frozenset({
+    "prices", "symbols", "symbol_stats", "latest_quote",
+    "daily_returns", "drawdowns", "moving_averages", "rolling_volatility",
+    "yearly_summary", "monthly_returns",
+})
 
 
 def _open_prices():
@@ -303,14 +317,45 @@ def _load_symbols(conn: sqlite3.Connection) -> int:
     return len(rows)
 
 
+def db_is_current(path: Path = DB_PATH) -> bool:
+    """True only if `path` is a database this version of the code built.
+
+    Existence alone is not enough: a deploy container reuses its disk, so a
+    database from an older schema (or a build that died halfway) can be sitting
+    there. Checking the stamp AND the object list means either case rebuilds
+    instead of failing at query time with `no such table`.
+    """
+    if not path.exists():
+        return False
+    try:
+        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    except sqlite3.Error:
+        return False
+    try:
+        row = conn.execute(
+            "SELECT value FROM meta WHERE key = 'schema_version'"
+        ).fetchone()
+        if not row or row[0] != str(SCHEMA_VERSION):
+            return False
+        names = {r[0] for r in conn.execute("SELECT name FROM sqlite_master")}
+        return REQUIRED_OBJECTS.issubset(names)
+    except sqlite3.Error:
+        return False  # missing meta table, corrupt file, etc.
+    finally:
+        conn.close()
+
+
 def main() -> None:
     if not SYMBOLS_CSV.exists():
         raise FileNotFoundError(f"Missing {SYMBOLS_CSV}. Run fetch_data.py first.")
 
-    if DB_PATH.exists():
-        DB_PATH.unlink()
+    # Build to a temp file and swap it in, so a crash mid-build leaves the old
+    # database in place rather than a half-populated one that looks valid.
+    tmp_path = DB_PATH.with_suffix(".db.building")
+    if tmp_path.exists():
+        tmp_path.unlink()
 
-    conn = get_connection(DB_PATH)
+    conn = get_connection(tmp_path)
     try:
         conn.executescript(SCHEMA_SQL)
         n_prices = _load_prices(conn)
@@ -318,11 +363,22 @@ def main() -> None:
         conn.executescript(INDEXES_SQL)
         conn.executescript(VIEWS_SQL)
         conn.executescript(MATERIALIZE_SQL)
+        conn.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+        conn.execute(
+            "INSERT INTO meta (key, value) VALUES ('schema_version', ?)",
+            (str(SCHEMA_VERSION),),
+        )
         conn.execute("ANALYZE")
         conn.commit()
-        print(f"Loaded {n_prices:,} price rows across {n_symbols} symbols -> {DB_PATH}")
-    finally:
+    except BaseException:
         conn.close()
+        tmp_path.unlink(missing_ok=True)
+        raise
+    else:
+        conn.close()
+
+    os.replace(tmp_path, DB_PATH)  # atomic on the same filesystem
+    print(f"Loaded {n_prices:,} price rows across {n_symbols} symbols -> {DB_PATH}")
 
 
 if __name__ == "__main__":
