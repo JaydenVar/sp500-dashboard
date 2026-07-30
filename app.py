@@ -124,7 +124,7 @@ st.markdown(
 # Two entirely separate experiences. User Mode never shows SQL, schemas, timings
 # or implementation detail -- mixing those into an end-user screen is what makes
 # an app read as a class project rather than a product.
-USER_SECTIONS = ["Overview", "Market", "Companies", "Performance", "Risk", "About"]
+USER_SECTIONS = ["Overview", "Market", "Companies", "Performance", "Risk", "Portfolio", "About"]
 
 # Deliberately a radio, not st.tabs. st.tabs renders EVERY tab's body on every
 # rerun, which (a) runs all sections' queries when only one is visible and
@@ -597,6 +597,120 @@ if not DEV and section == "Risk":
                 "horizon differs between points. Labels are drawn for every point here "
                 "because there are only ~49 and they are the identity channel."
             )
+
+# ---------------------------------------------------------------------------
+# Portfolio — build a weighted basket and see what it would have done
+# ---------------------------------------------------------------------------
+if not DEV and section == "Portfolio":
+    ui.section("Portfolio simulator", "Build a basket and see how it would have performed")
+    ui.note(
+        "Pick holdings and set their weights. Every figure is computed from the "
+        "actual daily history of those companies over the selected window."
+    )
+
+    all_syms = list(directory["symbol"])
+    name_of = dict(zip(directory["symbol"], directory["name"]))
+    default = [s for s in ("AAPL", "MSFT", "NVDA", "AMZN") if s in all_syms]
+
+    holdings = st.multiselect(
+        "Holdings", all_syms, default=st.session_state.get("pf_syms", default),
+        key="pf_syms", max_selections=8,
+        format_func=lambda s: f"{s} — {name_of.get(s, s)}",
+        help="Up to 8 holdings",
+    )
+
+    if not holdings:
+        ui.note("Add at least one holding to run a simulation.")
+    else:
+        st.markdown('<div class="note" style="margin-top:6px;">Weights (%)</div>',
+                    unsafe_allow_html=True)
+        cols = st.columns(min(len(holdings), 4))
+        raw_w: dict[str, float] = {}
+        for i_h, sym in enumerate(holdings):
+            with cols[i_h % len(cols)]:
+                raw_w[sym] = st.number_input(
+                    sym, min_value=0.0, max_value=100.0,
+                    value=float(round(100 / len(holdings), 1)), step=5.0,
+                    key=f"pf_w_{sym}",
+                )
+
+        total_w = sum(raw_w.values())
+        if total_w <= 0:
+            st.warning("Total weight must be greater than zero.")
+        else:
+            # Normalize so the basket always sums to 100%. Showing the raw total
+            # keeps that honest rather than silently rescaling behind the reader.
+            weights = tuple((s, w / total_w) for s, w in raw_w.items())
+            if abs(total_w - 100) > 0.05:
+                ui.note(
+                    f"Weights total {total_w:.1f}% — normalized to 100% for the "
+                    "simulation. Set them to sum to 100 to control it exactly."
+                )
+
+            stats = dal.portfolio_stats(weights, START, END)
+            pser = dal.portfolio_series(weights, START, END)
+
+            if stats is None or pser.empty:
+                st.warning(
+                    "Not enough overlapping history for that combination in this "
+                    "window. Try a longer range or different holdings."
+                )
+            else:
+                bench = dal.window_stats(INDEX_SYMBOL, START, END)
+                bench_ret = bench["period_return"] if bench is not None else None
+                diff = (stats["total_return"] - bench_ret) if bench_ret is not None else None
+
+                ui.kpi_cards([
+                    {"icon": "\U0001F4B0", "label": "Total return",
+                     "value": ui.fmt_pct(stats["total_return"], 1),
+                     "change": (f"{diff*100:+.1f} pts vs S&P 500" if diff is not None else None),
+                     "change_dir": ("up" if (diff or 0) >= 0 else "down"),
+                     "foot": f"{int(stats['sessions']):,} sessions"},
+                    {"icon": "\U0001F4C8", "label": "CAGR", "value": ui.fmt_pct(stats["cagr"], 1),
+                     "foot": "Annualized growth rate"},
+                    {"icon": "\u3030", "label": "Volatility",
+                     "value": ui.fmt_pct(stats["ann_volatility"], 1, signed=False),
+                     "foot": "Annualized, from daily moves"},
+                    {"icon": "\U0001F4C9", "label": "Max drawdown",
+                     "value": ui.fmt_pct(stats["max_drawdown"], 1),
+                     "change": "peak to trough", "change_dir": "down",
+                     "foot": "Deepest fall you'd have sat through"},
+                    {"icon": "\U0001F53A", "label": "Best day",
+                     "value": ui.fmt_pct(stats["best_day"], 1),
+                     "foot": f"Worst {ui.fmt_pct(stats['worst_day'], 1)}"},
+                ])
+
+                ui.section("Growth of the portfolio",
+                           f"Invested {pd.to_datetime(stats['first_date']):%b %d, %Y}")
+                fig_pf = charts.area_series(
+                    pser, "cumulative_return", pal, color_key="blue",
+                    y_title="Cumulative return", height=340,
+                    label=ui.fmt_pct(pser["cumulative_return"].iloc[-1], 0),
+                )
+                charts.add_events(fig_pf, pal, events.in_range(stats["first_date"], END))
+                ui.chart(fig_pf, key="pf_growth", config=PLOT_CONFIG)
+
+                mix = pd.DataFrame({
+                    "Ticker": [s for s, _ in weights],
+                    "Company": [name_of.get(s, s) for s, _ in weights],
+                    "Weight": [w * 100 for _, w in weights],
+                })
+                st.dataframe(
+                    mix, use_container_width=True, hide_index=True,
+                    column_config={"Weight": st.column_config.NumberColumn(
+                        "Weight", format="%.1f%%")},
+                )
+
+                ui.note_md(
+                    "**How this is modelled.** The portfolio is rebalanced back to "
+                    "target weights every day — the standard simple assumption. A "
+                    "real buy-and-hold basket drifts as winners grow, so its result "
+                    "would differ. Only sessions where every holding traded are "
+                    "counted, and the money goes in on the first such session, so a "
+                    "recently-listed holding sets the start date for the whole "
+                    "basket. Dividends are excluded, as everywhere else here."
+                )
+
 
 
 # ---------------------------------------------------------------------------

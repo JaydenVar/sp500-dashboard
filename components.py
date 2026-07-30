@@ -137,7 +137,17 @@ def section(title: str, sub: str = "") -> None:
 
 
 def note(text: str) -> None:
+    """Muted caption. Escapes its input -- use note_md() when you need emphasis."""
     st.markdown(f'<div class="note">{esc(text)}</div>', unsafe_allow_html=True)
+
+
+def note_md(text: str) -> None:
+    """Muted caption that renders Markdown (bold, links) instead of escaping it.
+
+    `note()` escapes its input, which is right for anything data-derived but turns
+    literal `**` into visible asterisks in hand-written copy.
+    """
+    st.caption(text)
 
 
 # ---------------------------------------------------------------------------

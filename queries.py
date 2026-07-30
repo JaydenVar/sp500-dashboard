@@ -498,3 +498,97 @@ EXPLORER: dict[str, dict[str, object]] = {
         ),
     },
 }
+
+
+# --------------------------------------------------------------------------
+# Portfolio simulation
+# --------------------------------------------------------------------------
+# A weighted portfolio's DAILY return is the weighted average of its holdings'
+# daily returns. That models a portfolio rebalanced back to target weights every
+# day -- the standard simple assumption, and stated as such in the UI, because a
+# buy-and-hold portfolio drifts away from its target weights as winners grow.
+#
+# Only sessions where EVERY holding traded are used, so a symbol that listed
+# mid-window cannot silently change the portfolio's composition partway through.
+PORTFOLIO_SERIES = """
+WITH picks(symbol, weight) AS (VALUES {weight_rows}),
+-- The money goes in on the first session where EVERY holding has a price. That
+-- is the investable date; returns accrue from the following session. Defining
+-- it from returns instead would start a day late and drop a real trading day
+-- whenever a holding listed mid-window.
+priced AS (
+    SELECT p.date
+    FROM prices p JOIN picks k ON k.symbol = p.symbol
+    WHERE p.date BETWEEN :start AND :end AND p.close IS NOT NULL
+    GROUP BY p.date
+    HAVING COUNT(DISTINCT p.symbol) = (SELECT COUNT(*) FROM picks)
+),
+invested AS (SELECT MIN(date) AS d0 FROM priced),
+port AS (
+    SELECT d.date, SUM(d.daily_return * k.weight) AS port_return
+    FROM daily_returns d
+    JOIN picks k ON k.symbol = d.symbol
+    JOIN priced pr ON pr.date = d.date
+    WHERE d.date > (SELECT d0 FROM invested)
+      AND d.daily_return IS NOT NULL
+    GROUP BY d.date
+    HAVING COUNT(*) = (SELECT COUNT(*) FROM picks)
+)
+SELECT
+    date,
+    port_return,
+    EXP(SUM(LN(1 + port_return)) OVER (ORDER BY date)) - 1 AS cumulative_return
+FROM port
+ORDER BY date;
+"""
+
+
+# Headline portfolio statistics, computed from the same weighted daily series.
+PORTFOLIO_STATS = """
+WITH picks(symbol, weight) AS (VALUES {weight_rows}),
+priced AS (
+    SELECT p.date
+    FROM prices p JOIN picks k ON k.symbol = p.symbol
+    WHERE p.date BETWEEN :start AND :end AND p.close IS NOT NULL
+    GROUP BY p.date
+    HAVING COUNT(DISTINCT p.symbol) = (SELECT COUNT(*) FROM picks)
+),
+invested AS (SELECT MIN(date) AS d0 FROM priced),
+port AS (
+    SELECT d.date, SUM(d.daily_return * k.weight) AS pr
+    FROM daily_returns d
+    JOIN picks k ON k.symbol = d.symbol
+    JOIN priced p ON p.date = d.date
+    WHERE d.date > (SELECT d0 FROM invested)
+      AND d.daily_return IS NOT NULL
+    GROUP BY d.date
+    HAVING COUNT(*) = (SELECT COUNT(*) FROM picks)
+),
+growth AS (
+    SELECT date, pr, EXP(SUM(LN(1 + pr)) OVER (ORDER BY date)) AS wealth
+    FROM port
+),
+peaks AS (
+    SELECT date, wealth,
+           MAX(wealth) OVER (ORDER BY date
+                             ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS peak
+    FROM growth
+),
+moments AS (
+    SELECT AVG(pr) AS mean_r, AVG(pr * pr) AS mean_sq, COUNT(*) AS n, MAX(date) AS d1
+    FROM port
+)
+SELECT
+    m.n AS sessions,
+    (SELECT d0 FROM invested) AS first_date,
+    m.d1 AS last_date,
+    (SELECT wealth FROM growth ORDER BY date DESC LIMIT 1) - 1 AS total_return,
+    -- Elapsed time runs from the investment date, not the first return date.
+    POWER((SELECT wealth FROM growth ORDER BY date DESC LIMIT 1),
+          1.0 / MAX((julianday(m.d1) - julianday((SELECT d0 FROM invested))) / 365.25, 0.01)) - 1 AS cagr,
+    SQRT(MAX(m.mean_sq - m.mean_r * m.mean_r, 0)) * SQRT(252) AS ann_volatility,
+    (SELECT MIN((wealth - peak) / peak) FROM peaks) AS max_drawdown,
+    (SELECT MAX(pr) FROM port) AS best_day,
+    (SELECT MIN(pr) FROM port) AS worst_day
+FROM moments m;
+"""

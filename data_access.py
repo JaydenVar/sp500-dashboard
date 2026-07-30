@@ -160,6 +160,37 @@ def sector_performance(start: str, end: str) -> pd.DataFrame:
     return _read(queries.SECTOR_PERFORMANCE, {"start": start, "end": end})
 
 
+def _weight_rows(weights: tuple[tuple[str, float], ...]) -> str:
+    """Build the VALUES list for a portfolio query.
+
+    Symbols are validated against the universe rather than interpolated blindly:
+    they reach this from a multiselect, but a table name spliced into SQL is a
+    habit worth never forming. Weights are floats and formatted as such.
+    """
+    from universe import all_symbols
+
+    known = set(all_symbols())
+    rows = []
+    for sym, w in weights:
+        if sym not in known:
+            raise ValueError(f"unknown symbol: {sym!r}")
+        rows.append(f"('{sym}', {float(w):.10f})")
+    return ", ".join(rows)
+
+
+@st.cache_data(ttl=TTL, show_spinner=False)
+def portfolio_series(weights: tuple[tuple[str, float], ...], start: str, end: str) -> pd.DataFrame:
+    sql = queries.PORTFOLIO_SERIES.format(weight_rows=_weight_rows(weights))
+    return _dated(_read(sql, {"start": start, "end": end}))
+
+
+@st.cache_data(ttl=TTL, show_spinner=False)
+def portfolio_stats(weights: tuple[tuple[str, float], ...], start: str, end: str) -> pd.Series | None:
+    sql = queries.PORTFOLIO_STATS.format(weight_rows=_weight_rows(weights))
+    df = _read(sql, {"start": start, "end": end})
+    return None if df.empty or pd.isna(df.iloc[0]["sessions"]) else df.iloc[0]
+
+
 @st.cache_data(ttl=TTL, show_spinner=False)
 def indexed_comparison(symbols: tuple[str, ...], start: str, end: str) -> pd.DataFrame:
     """Rebased-to-100 series for the given symbols, pivoted date x symbol.
