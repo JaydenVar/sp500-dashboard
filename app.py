@@ -64,6 +64,16 @@ def resolve_range(preset: str, min_d: dt.date, max_d: dt.date) -> tuple[dt.date,
     return max(max_d - dt.timedelta(days=int(spec)), min_d), max_d
 
 
+def use_example(text: str) -> None:
+    """Load a suggestion chip into the Ask box.
+
+    Streamlit refuses writes to a widget's key once that widget has been
+    instantiated this run, so this has to run as the button's on_click --
+    callbacks fire before the rerun, while the text_input does not yet exist.
+    """
+    st.session_state.ask_q = text
+
+
 # ---------------------------------------------------------------------------
 # Theme + chrome
 # ---------------------------------------------------------------------------
@@ -156,9 +166,10 @@ if not DEV and section == "Overview":
     ex_cols = st.columns(len(ask.EXAMPLES))
     for i_e, ex in enumerate(ask.EXAMPLES):
         with ex_cols[i_e]:
-            if st.button(ex, key=f"ask_ex_{i_e}", use_container_width=True):
-                st.session_state.ask_q = ex
-                st.rerun()
+            st.button(
+                ex, key=f"ask_ex_{i_e}", use_container_width=True,
+                on_click=use_example, args=(ex,),
+            )
 
     if asked and asked.strip():
         intent, syms, yr = ask.match(asked, directory)
