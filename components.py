@@ -13,8 +13,27 @@ import zoneinfo
 import pandas as pd
 import streamlit as st
 
+
+def _market_tz():
+    """Exchange-local timezone, resolved defensively.
+
+    `zoneinfo` reads the *system* tz database, which slim Linux containers often
+    omit even though macOS always has it -- so this resolves locally and can fail
+    at import time in a deploy. `tzdata` is in requirements.txt to supply it, and
+    this fallback means a missing database degrades the market-status label to a
+    fixed-offset approximation instead of taking the whole app down.
+    """
+    try:
+        return zoneinfo.ZoneInfo("America/New_York")
+    except Exception:
+        # Fixed -5h: correct in winter, an hour off during US DST. The status pill
+        # already says it is schedule-based, and a slightly-off label beats a crash.
+        return dt.timezone(dt.timedelta(hours=-5), "ET (approx)")
+
+
 # US equity regular session, in exchange-local time.
-MARKET_TZ = zoneinfo.ZoneInfo("America/New_York")
+MARKET_TZ = _market_tz()
+TZ_IS_EXACT = isinstance(MARKET_TZ, zoneinfo.ZoneInfo)
 OPEN_T = dt.time(9, 30)
 CLOSE_T = dt.time(16, 0)
 
@@ -71,13 +90,16 @@ def market_status(now: dt.datetime | None = None) -> tuple[bool, str]:
     weekday = now.weekday() < 5
     in_hours = OPEN_T <= now.time() < CLOSE_T
     is_open = weekday and in_hours
+    # If the tz database was unavailable we're on a fixed offset that ignores DST,
+    # so say so rather than presenting an hour-off clock as exact.
+    approx = "" if TZ_IS_EXACT else " (approx)"
     if is_open:
-        return True, f"Market open · {now:%H:%M} ET"
+        return True, f"Market open · {now:%H:%M} ET{approx}"
     if not weekday:
         return False, "Market closed · weekend"
     if now.time() < OPEN_T:
-        return False, f"Pre-market · opens 09:30 ET"
-    return False, f"After hours · closed 16:00 ET"
+        return False, f"Pre-market · opens 09:30 ET{approx}"
+    return False, f"After hours · closed 16:00 ET{approx}"
 
 
 def header(title: str, subtitle: str, data_through: dt.date, n_symbols: int) -> None:

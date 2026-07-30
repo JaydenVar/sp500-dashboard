@@ -1,3 +1,6 @@
 streamlit==1.50.0
 plotly==6.9.0
 pandas==2.3.3
+# zoneinfo reads the system tz database, which slim Linux deploy images often
+# omit. This supplies it so market-status uses real America/New_York DST rules.
+tzdata==2025.2
