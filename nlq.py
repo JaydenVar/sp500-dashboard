@@ -42,6 +42,9 @@ _INTENT_SCHEMA = {
         "intent": {"type": "string", "enum": list(INTENTS)},
         "metric": {"type": "string", "description": "return, volume, volatility, drawdown, cagr, price, or empty"},
         "limit": {"type": "integer", "description": "How many rows the user asked for; 0 if unstated"},
+        "lookback_days": {"type": "integer",
+                          "description": "Relative window in days: 'last year'=365, "
+                                         "'past 3 years'=1095, 'last 6 months'=182. 0 if unstated"},
         "companies": {"type": "array", "items": {"type": "string"},
                       "description": "Tickers from the catalog, in the order mentioned"},
         "sector": {"type": "string"},
@@ -52,8 +55,9 @@ _INTENT_SCHEMA = {
         "comparison_targets": {"type": "array", "items": {"type": "string"}},
         "question_restated": {"type": "string", "description": "The question, spelling corrected"},
     },
-    "required": ["intent", "metric", "limit", "companies", "sector", "start_date",
-                 "end_date", "period", "ordering", "comparison_targets", "question_restated"],
+    "required": ["intent", "metric", "limit", "lookback_days", "companies", "sector",
+                 "start_date", "end_date", "period", "ordering", "comparison_targets",
+                 "question_restated"],
     "additionalProperties": False,
 }
 
@@ -82,9 +86,20 @@ Pick the single best `intent`:
 Choose `custom` only when no listed intent fits -- it is more expensive to serve. \
 A question that is one of the above but worded oddly is still that intent.
 
-Set `limit` only when a count is actually stated. Leave `start_date`/`end_date` \
-empty unless specific dates or a year are given; put relative windows ("past 5 \
-years") in `period` instead.
+Extract every parameter the question actually states, and leave the rest empty -- \
+an unstated value means "use what the screen is showing", so inventing one \
+silently overrides the user's own filter.
+
+  limit          only when a count is stated ("top 5" -> 5, "five best" -> 5)
+  lookback_days  relative windows: "last year" -> 365, "past 3 years" -> 1095,
+                 "last 6 months" -> 182. Leave 0 when no window is stated.
+  start/end_date only for specific dates or a named year (2020 -> 2020-01-01)
+  sector         one of the sector names listed below, matched from words like
+                 "tech" or "technology"
+  metric         return, volume, volatility, drawdown, cagr or price
+  ordering       desc for "best/top/highest", asc for "worst/lowest"
+
+Sectors: {sectors}
 
 Company catalog:
 {catalog}"""
@@ -124,6 +139,7 @@ class Intent:
     intent: str = "custom"
     metric: str = ""
     limit: int = 0
+    lookback_days: int = 0
     companies: tuple[str, ...] = ()
     sector: str = ""
     start_date: str = ""
@@ -183,7 +199,7 @@ def _text(response) -> str:
 # Intent extraction
 # ---------------------------------------------------------------------------
 @st.cache_data(ttl=_TTL, show_spinner=False)
-def _extract_raw(question: str, catalog: str) -> dict | None:
+def _extract_raw(question: str, catalog: str, sectors: str) -> dict | None:
     client = _client()
     if client is None:
         return None
@@ -191,7 +207,7 @@ def _extract_raw(question: str, catalog: str) -> dict | None:
         response = client.messages.create(
             model=MODEL,
             max_tokens=2000,
-            system=_EXTRACT_SYSTEM.format(catalog=catalog),
+            system=_EXTRACT_SYSTEM.format(catalog=catalog, sectors=sectors),
             # Classification, and it sits in front of a user waiting on a page
             # render -- low effort is the right trade here, not a cost dodge.
             output_config={"effort": "low",
@@ -216,7 +232,8 @@ def extract(question: str, directory) -> Intent | None:
         f"  {r['symbol']} = {r['name']} ({r['sector']})"
         for _, r in directory.iterrows()
     )
-    data = _extract_raw(question.strip(), catalog)
+    sectors = ", ".join(sorted({str(s) for s in directory["sector"].dropna().unique()}))
+    data = _extract_raw(question.strip(), catalog, sectors)
     if not data:
         return None
 
@@ -233,6 +250,7 @@ def extract(question: str, directory) -> Intent | None:
         intent=intent if intent in INTENTS else "custom",
         metric=str(data.get("metric") or ""),
         limit=max(0, min(int(data.get("limit") or 0), 50)),
+        lookback_days=max(0, min(int(data.get("lookback_days") or 0), 40 * 365)),
         companies=syms("companies"),
         sector=str(data.get("sector") or ""),
         start_date=str(data.get("start_date") or ""),

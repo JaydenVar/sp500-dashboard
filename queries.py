@@ -646,3 +646,62 @@ Conventions:
   * Sector figures use MEDIAN, not AVG -- one outlier otherwise stands in for
     a whole sector.
 """
+
+
+# ---------------------------------------------------------------------------
+# Parameterized variants for Ask the Market
+# ---------------------------------------------------------------------------
+# The plain LEADERBOARD and PERIOD_MOVERS above return everything and let the
+# caller slice. These take the row count, the sector filter and the sort column
+# as query parameters instead, so a question's "top 5 technology companies"
+# becomes a LIMIT and a WHERE rather than a pandas `.head()` after the fact --
+# the parameters reach the database, which is where a reader of the SQL Explorer
+# would expect to find them.
+#
+# `{order_by}` and `{not_null}` are format slots, not bind parameters: SQLite
+# cannot bind a column name. Both are filled from a whitelist in data_access, so
+# no user-supplied text ever reaches them. `:limit` of -1 means no limit.
+
+PERIOD_MOVERS_RANKED = """
+WITH win AS (
+    SELECT symbol, date, close
+    FROM prices
+    WHERE date BETWEEN :start AND :end
+),
+edges AS (
+    SELECT symbol, MIN(date) AS first_date, MAX(date) AS last_date, COUNT(*) AS sessions
+    FROM win GROUP BY symbol
+)
+SELECT
+    s.symbol, s.name, s.sector,
+    e.first_date, e.last_date, e.sessions,
+    fo.close AS start_close,
+    lc.close AS end_close,
+    (lc.close - fo.close) / fo.close AS period_return,
+    (SELECT AVG(close * volume) FROM prices p
+      WHERE p.symbol = s.symbol AND p.date BETWEEN :start AND :end) AS avg_dollar_volume
+FROM symbols s
+JOIN edges e ON e.symbol = s.symbol
+JOIN win fo  ON fo.symbol = s.symbol AND fo.date = e.first_date
+JOIN win lc  ON lc.symbol = s.symbol AND lc.date = e.last_date
+WHERE s.is_index = 0
+  AND (:sector = '' OR s.sector = :sector)
+ORDER BY {order_by}
+LIMIT :limit;
+"""
+
+LEADERBOARD_RANKED = """
+SELECT
+    symbol, name, sector, industry,
+    first_date, last_date, years,
+    last_close, last_daily_return,
+    total_return, cagr,
+    ann_volatility, current_volatility, max_drawdown,
+    highest_close, lowest_close, avg_volume, avg_dollar_volume
+FROM symbol_stats
+WHERE is_index = 0
+  AND (:sector = '' OR sector = :sector)
+  AND {not_null} IS NOT NULL
+ORDER BY {order_by}
+LIMIT :limit;
+"""

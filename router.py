@@ -32,6 +32,7 @@ import streamlit as st
 
 import ask
 import nlq
+import params as prm
 import queries
 import sqlguard
 from db import get_readonly_connection
@@ -79,6 +80,7 @@ class Route:
     question: str
     path: str = UNMATCHED_PATH
     intent: nlq.Intent | None = None
+    params: prm.Params | None = None
     template: Template | None = None
     sql: str = ""
     df: pd.DataFrame | None = None
@@ -92,6 +94,8 @@ class Route:
 
     @property
     def symbols(self) -> list[str]:
+        if self.params is not None:
+            return list(self.params.symbols)
         if self.intent is None:
             return []
         return list(self.intent.companies or self.intent.comparison_targets)
@@ -108,6 +112,9 @@ def _log(route: Route) -> None:
         "intent": route.intent.intent if route.intent else "-",
         "source": route.intent.source if route.intent else "-",
         "detail": route.template.label if route.template else (route.reason or "generated"),
+        # Which value won each precedence contest -- the first thing to check when
+        # an answer used a window or a row count the asker didn't expect.
+        "params": route.params.summary() if route.params else "-",
         "ms": round(route.ms, 1),
     })
     del entries[:-20]
@@ -211,8 +218,14 @@ def _run_generated(route: Route, hint: str) -> None:
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
-def route(question: str, directory, *, window_note: str = "") -> Route:
-    """Resolve a question to a template, or to validated generated SQL."""
+def route(question: str, directory, *, ui_start: str, ui_end: str, ui_preset: str,
+          data_min, data_max, window_note: str = "") -> Route:
+    """Resolve a question to a template, or to validated generated SQL.
+
+    The UI window is passed in rather than read here, because it is the second
+    tier of the precedence rule -- the router has to know what the screen is
+    showing to decide whether the question overrode it.
+    """
     started = time.perf_counter()
     result = Route(question=question.strip())
 
@@ -221,6 +234,15 @@ def route(question: str, directory, *, window_note: str = "") -> Route:
         return result
 
     result.intent = resolve_intent(result.question, directory)
+
+    # Resolved for every path, including a miss: an unmatched question still has
+    # a window, and the generated-SQL prompt is told what it is.
+    sectors = sorted({str(s) for s in directory["sector"].dropna().unique()})
+    result.params = prm.resolve(
+        result.intent or nlq.Intent(), question=result.question,
+        ui_start=ui_start, ui_end=ui_end, ui_preset=ui_preset,
+        data_min=data_min, data_max=data_max, sectors=sectors,
+    )
 
     if result.intent is not None:
         template = TEMPLATES.get(result.intent.intent)
@@ -231,7 +253,19 @@ def route(question: str, directory, *, window_note: str = "") -> Route:
             _log(result)
             return result
 
-    _run_generated(result, window_note)
+    # The generated-SQL prompt gets the resolved window and filters, so a question
+    # that said "last 3 years" produces SQL bounded by those dates rather than SQL
+    # that ignores them and a caller that silently re-slices afterwards.
+    p = result.params
+    hint = window_note or ""
+    hint = (f"{hint} Answer over {p.start} to {p.end} ({p.preset}). "
+            f"Return at most {p.limit} rows.").strip()
+    if p.sector:
+        hint += f" Restrict to the {p.sector} sector."
+    if p.symbols:
+        hint += f" Concerns these symbols: {', '.join(p.symbols)}."
+
+    _run_generated(result, hint)
     result.ms = (time.perf_counter() - started) * 1000
     _log(result)
     return result

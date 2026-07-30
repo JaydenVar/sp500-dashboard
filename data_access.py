@@ -160,6 +160,59 @@ def sector_performance(start: str, end: str) -> pd.DataFrame:
     return _read(queries.SECTOR_PERFORMANCE, {"start": start, "end": end})
 
 
+# ---------------------------------------------------------------------------
+# Parameterized variants — used by Ask the Market
+# ---------------------------------------------------------------------------
+# Sort column, sector and row count are pushed into the query rather than applied
+# to its result, so a question's parameters are visible in the SQL. The column
+# name cannot be a bind parameter in SQLite, so it is resolved through these
+# whitelists -- a key that isn't here raises rather than reaching the statement.
+MOVERS_SORTS = {
+    "return": "period_return",
+    "volume": "avg_dollar_volume",
+    "turnover": "avg_dollar_volume",
+    "liquidity": "avg_dollar_volume",
+}
+STATS_SORTS = {
+    "cagr": "cagr",
+    "return": "total_return",
+    "volatility": "ann_volatility",
+    "risk": "ann_volatility",
+    "drawdown": "max_drawdown",
+    "years": "years",
+    "volume": "avg_dollar_volume",
+    "turnover": "avg_dollar_volume",
+}
+
+
+def _order(column: str, ascending: bool) -> str:
+    return f"{column} {'ASC' if ascending else 'DESC'}"
+
+
+@st.cache_data(ttl=TTL, show_spinner=False)
+def movers_ranked(start: str, end: str, *, sort: str = "return",
+                  ascending: bool = False, sector: str = "", limit: int = -1) -> pd.DataFrame:
+    """Period movers, filtered and ranked in SQL. `limit=-1` means every row."""
+    column = MOVERS_SORTS.get(sort, MOVERS_SORTS["return"])
+    sql = queries.PERIOD_MOVERS_RANKED.format(order_by=_order(column, ascending))
+    return _read(sql, {"start": start, "end": end, "sector": sector, "limit": int(limit)})
+
+
+@st.cache_data(ttl=TTL, show_spinner=False)
+def leaderboard_ranked(*, sort: str = "cagr", ascending: bool = False,
+                       sector: str = "", limit: int = -1) -> pd.DataFrame:
+    """All-time stats, filtered and ranked in SQL.
+
+    Rows where the sort column is NULL are excluded in the query. SQLite orders
+    NULLs first on an ascending sort, so a "steadiest company" question would
+    otherwise return companies with no volatility figure at all.
+    """
+    column = STATS_SORTS.get(sort, STATS_SORTS["cagr"])
+    sql = queries.LEADERBOARD_RANKED.format(
+        order_by=_order(column, ascending), not_null=column)
+    return _read(sql, {"sector": sector, "limit": int(limit)})
+
+
 def _weight_rows(weights: tuple[tuple[str, float], ...]) -> str:
     """Build the VALUES list for a portfolio query.
 

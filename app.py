@@ -66,18 +66,6 @@ def resolve_range(preset: str, min_d: dt.date, max_d: dt.date) -> tuple[dt.date,
     return max(max_d - dt.timedelta(days=int(spec)), min_d), max_d
 
 
-def ask_year(routed) -> int | None:
-    """The year an Ask question pinned itself to, if it named one.
-
-    The router carries this as an ISO date because the model can return a real
-    date; the window controls below think in years, so this narrows it back.
-    """
-    stamp = routed.intent.start_date if routed.intent else ""
-    if len(stamp) >= 4 and stamp[:4].isdigit():
-        return int(stamp[:4])
-    return None
-
-
 def use_example(text: str) -> None:
     """Load a suggestion chip into the Ask box.
 
@@ -187,22 +175,17 @@ if not DEV and section == "Overview":
             )
 
     if asked and asked.strip():
+        # The current window goes in as the second precedence tier: a question
+        # that names its own window overrides it, one that doesn't inherits it.
         with st.spinner("Reading the question…"):
             routed = router.route(
                 asked, directory,
-                window_note=f"The dashboard window is currently {preset} ({START} to {END}).",
+                ui_start=START, ui_end=END, ui_preset=preset,
+                data_min=index_min, data_max=end_d,
             )
 
         if routed.path == router.TEMPLATE_PATH:
-            a_start, a_end = START, END
-            a_preset = preset
-            yr = ask_year(routed)
-            if yr:  # "since 2020" overrides the window for this answer
-                y_start = dt.date(yr, 1, 1)
-                if index_min <= y_start <= end_d:
-                    a_start, a_preset = y_start.isoformat(), f"since {yr}"
-            answers.HANDLERS[routed.template.handler](
-                directory, pal, a_start, a_end, routed.symbols, a_preset)
+            answers.HANDLERS[routed.template.handler](directory, pal, routed.params)
 
         elif routed.path == router.GENERATED_PATH:
             # No template covered this one, so the answer came from generated SQL.

@@ -24,27 +24,59 @@ def _headline(text: str) -> None:
     st.markdown(f'<div class="answer">{text}</div>', unsafe_allow_html=True)
 
 
-def _movers(start: str, end: str) -> pd.DataFrame:
-    return dal.period_movers(start, end)
-
-
 def _name(directory: pd.DataFrame, sym: str) -> str:
     row = directory[directory["symbol"] == sym]
     return str(row.iloc[0]["name"]) if len(row) else sym
 
 
+def _scope(p) -> str:
+    """How the answer describes the slice it actually used.
+
+    The window and any sector filter came from the question or from the sidebar,
+    and the headline has to say which -- an answer that silently narrows to one
+    sector reads as a wrong answer about the whole market.
+    """
+    where = f" in {ui.esc(p.sector)}" if p.sector else ""
+    return f"{where} over {ui.esc(p.preset)}"
+
+
+def _movers_sort(p) -> str:
+    """Map a stated metric onto a sortable column, defaulting to return."""
+    return p.metric if p.metric in dal.MOVERS_SORTS else "return"
+
+
+def _stats_sort(p, default: str) -> str:
+    return p.metric if p.metric in dal.STATS_SORTS else default
+
+
+def _descending(p, default: bool) -> bool:
+    """Explicit ordering in the question overrides the intent's natural direction."""
+    if p.ordering == "asc":
+        return False
+    if p.ordering == "desc":
+        return True
+    return default
+
+
+def _empty(p) -> None:
+    if p.sector:
+        st.warning(f"No companies in {ui.esc(p.sector)} have data over {ui.esc(p.preset)}.")
+    else:
+        st.warning("No data in this window.")
+
+
 # ---------------------------------------------------------------------------
 # Handlers
 # ---------------------------------------------------------------------------
-def top_volume(directory, pal, start, end, symbols, preset):
-    df = _movers(start, end)
-    if df.empty:
-        return st.warning("No data in this window.")
-    top = df.sort_values("avg_dollar_volume", ascending=False).head(10)
+def top_volume(directory, pal, p):
+    top = dal.movers_ranked(p.start, p.end, sort="volume", ascending=False,
+                            sector=p.sector, limit=p.limit)
+    if top.empty:
+        return _empty(p)
     w = top.iloc[0]
     _headline(
-        f"<b>{ui.esc(w['name'])} ({ui.esc(w['symbol'])})</b> traded the most, averaging "
-        f"<b>{ui.fmt_dollar_compact(w['avg_dollar_volume'])}</b> of turnover a day over {preset}."
+        f"<b>{ui.esc(w['name'])} ({ui.esc(w['symbol'])})</b> traded the most{_scope(p)}, averaging "
+        f"<b>{ui.fmt_dollar_compact(w['avg_dollar_volume'])}</b> of turnover a day."
     )
     ui.note(
         "Measured as dollar turnover (price × shares), which compares fairly across "
@@ -61,16 +93,19 @@ def top_volume(directory, pal, start, end, symbols, preset):
                       "Return": st.column_config.NumberColumn(format="%+.1f%%")})
 
 
-def _gainers_losers(directory, pal, start, end, preset, best: bool, key: str):
-    df = _movers(start, end)
-    if df.empty:
-        return st.warning("No data in this window.")
-    df = df.sort_values("period_return", ascending=not best)
-    top = df.head(10)
+def _gainers_losers(directory, pal, p, best: bool, key: str):
+    sort = _movers_sort(p)
+    top = dal.movers_ranked(p.start, p.end, sort=sort, ascending=not _descending(p, best),
+                            sector=p.sector, limit=p.limit)
+    if top.empty:
+        return _empty(p)
+    # Breadth is a different question from the ranking, so it gets its own
+    # unlimited query rather than being derived from the truncated one.
+    df = dal.movers_ranked(p.start, p.end, sort=sort, sector=p.sector, limit=-1)
     w = top.iloc[0]
     verb = "gained" if best else "lost"
     _headline(
-        f"<b>{ui.esc(w['name'])} ({ui.esc(w['symbol'])})</b> {verb} the most over {preset}, "
+        f"<b>{ui.esc(w['name'])} ({ui.esc(w['symbol'])})</b> {verb} the most{_scope(p)}, "
         f"at <b>{ui.fmt_pct(w['period_return'], 1)}</b>."
     )
     adv = int((df["period_return"] > 0).sum())
@@ -93,19 +128,20 @@ def _gainers_losers(directory, pal, start, end, preset, best: bool, key: str):
                   column_config={"Return": st.column_config.NumberColumn(format="%+.1f%%")})
 
 
-def top_gainers(directory, pal, start, end, symbols, preset):
-    _gainers_losers(directory, pal, start, end, preset, True, "ans_win")
+def top_gainers(directory, pal, p):
+    _gainers_losers(directory, pal, p, True, "ans_win")
 
 
-def top_losers(directory, pal, start, end, symbols, preset):
-    _gainers_losers(directory, pal, start, end, preset, False, "ans_lose")
+def top_losers(directory, pal, p):
+    _gainers_losers(directory, pal, p, False, "ans_lose")
 
 
-def biggest_drawdown(directory, pal, start, end, symbols, preset):
-    lb = dal.leaderboard()
+def biggest_drawdown(directory, pal, p):
+    lb = dal.leaderboard_ranked(sort=_stats_sort(p, "drawdown"), ascending=True,
+                                sector=p.sector, limit=p.limit)
     if lb.empty:
-        return st.warning("No data available.")
-    w = lb.sort_values("max_drawdown").iloc[0]
+        return _empty(p)
+    w = lb.iloc[0]
     _headline(
         f"<b>{ui.esc(w['name'])} ({ui.esc(w['symbol'])})</b> suffered the deepest fall: "
         f"<b>{ui.fmt_pct(w['max_drawdown'], 1)}</b> from a previous high."
@@ -115,16 +151,15 @@ def biggest_drawdown(directory, pal, start, end, symbols, preset):
         "full listed history — it is the loss an investor would have had to sit "
         "through, not a single-day move."
     )
-    dd = dal.drawdowns(str(w["symbol"]), start, end)
+    dd = dal.drawdowns(str(w["symbol"]), p.start, p.end)
     if not dd.empty:
         fig = charts.area_series(dd, "drawdown", pal, color_key="red",
                                  y_title="Drawdown", height=300, tickformat=".0%")
-        charts.add_events(fig, pal, events.in_range(start, end))
+        charts.add_events(fig, pal, events.in_range(p.start, p.end))
         ui.chart(fig, key="ans_dd", config=PLOT_CONFIG, controls=False,
-                 caption=f"{w['symbol']} drawdown over {preset}")
+                 caption=f"{w['symbol']} drawdown over {p.preset}")
 
-    tbl = lb.sort_values("max_drawdown").head(10)
-    out = tbl.assign(MaxDD=tbl["max_drawdown"] * 100, Vol=tbl["ann_volatility"] * 100)[
+    out = lb.assign(MaxDD=lb["max_drawdown"] * 100, Vol=lb["ann_volatility"] * 100)[
         ["symbol", "name", "sector", "MaxDD", "Vol"]]
     out.columns = ["Ticker", "Company", "Sector", "Max drawdown", "Volatility"]
     ui.data_table(out, key="ans_ddt", search_cols=("Ticker", "Company"),
@@ -134,15 +169,19 @@ def biggest_drawdown(directory, pal, start, end, symbols, preset):
                       "Volatility": st.column_config.NumberColumn(format="%.1f%%")})
 
 
-def _by_volatility(directory, pal, most: bool, key: str):
-    lb = dal.leaderboard().dropna(subset=["ann_volatility"])
-    if lb.empty:
-        return st.warning("No data available.")
-    df = lb.sort_values("ann_volatility", ascending=not most)
-    w = df.iloc[0]
+def _by_volatility(directory, pal, p, most: bool, key: str):
+    # NULL volatility is excluded in SQL -- on an ascending sort SQLite would
+    # otherwise return companies with no figure at all as the "steadiest".
+    top = dal.leaderboard_ranked(sort=_stats_sort(p, "volatility"),
+                                 ascending=not _descending(p, most),
+                                 sector=p.sector, limit=p.limit)
+    if top.empty:
+        return _empty(p)
+    w = top.iloc[0]
     _headline(
         f"<b>{ui.esc(w['name'])} ({ui.esc(w['symbol'])})</b> has been the "
-        f"{'most volatile' if most else 'steadiest'}, at "
+        f"{'most volatile' if most else 'steadiest'}"
+        f"{' in ' + ui.esc(p.sector) if p.sector else ''}, at "
         f"<b>{ui.fmt_pct(w['ann_volatility'], 1, signed=False)}</b> annualized."
     )
     ui.note(
@@ -150,7 +189,6 @@ def _by_volatility(directory, pal, most: bool, key: str):
         "company's full history. Higher means a rougher ride — not necessarily a "
         "worse outcome; check the return and drawdown alongside it."
     )
-    top = df.head(10)
     out = top.assign(Vol=top["ann_volatility"] * 100, CAGR=top["cagr"] * 100,
                      MaxDD=top["max_drawdown"] * 100)[
         ["symbol", "name", "sector", "Vol", "CAGR", "MaxDD"]]
@@ -163,28 +201,30 @@ def _by_volatility(directory, pal, most: bool, key: str):
                       "Max drawdown": st.column_config.NumberColumn(format="%.1f%%")})
 
 
-def most_volatile(directory, pal, start, end, symbols, preset):
-    _by_volatility(directory, pal, True, "ans_vola")
+def most_volatile(directory, pal, p):
+    _by_volatility(directory, pal, p, True, "ans_vola")
 
 
-def least_volatile(directory, pal, start, end, symbols, preset):
-    _by_volatility(directory, pal, False, "ans_stable")
+def least_volatile(directory, pal, p):
+    _by_volatility(directory, pal, p, False, "ans_stable")
 
 
-def best_cagr(directory, pal, start, end, symbols, preset):
-    lb = dal.leaderboard().sort_values("cagr", ascending=False)
-    if lb.empty:
-        return st.warning("No data available.")
-    w = lb.iloc[0]
+def best_cagr(directory, pal, p):
+    top = dal.leaderboard_ranked(sort=_stats_sort(p, "cagr"),
+                                 ascending=not _descending(p, True),
+                                 sector=p.sector, limit=p.limit)
+    if top.empty:
+        return _empty(p)
+    w = top.iloc[0]
     _headline(
-        f"<b>{ui.esc(w['name'])} ({ui.esc(w['symbol'])})</b> compounded fastest at "
+        f"<b>{ui.esc(w['name'])} ({ui.esc(w['symbol'])})</b> compounded fastest"
+        f"{' in ' + ui.esc(p.sector) if p.sector else ''} at "
         f"<b>{ui.fmt_pct(w['cagr'], 1)}</b> a year over {w['years']:.0f} years."
     )
     ui.note(
         "CAGR is each company's own listed history, so the periods differ — "
         "'Years' is shown so a shorter, luckier run isn't mistaken for a longer one."
     )
-    top = lb.head(10)
     out = top.assign(CAGR=top["cagr"] * 100, Total=top["total_return"] * 100,
                      Years=top["years"].round(1))[
         ["symbol", "name", "sector", "Years", "CAGR", "Total"]]
@@ -197,12 +237,12 @@ def best_cagr(directory, pal, start, end, symbols, preset):
                       "Years": st.column_config.NumberColumn(format="%.1f")})
 
 
-def compare(directory, pal, start, end, symbols, preset):
-    syms = symbols[:4]
+def compare(directory, pal, p):
+    syms = list(p.symbols)[:4]
     if len(syms) < 2:
         return st.info("Name two companies to compare, e.g. “Compare Apple and Microsoft”.")
 
-    pivot = dal.indexed_comparison(tuple(syms), start, end)
+    pivot = dal.indexed_comparison(tuple(syms), p.start, p.end)
     if pivot.empty:
         return st.warning("No overlapping history for those companies in this window.")
 
@@ -210,7 +250,7 @@ def compare(directory, pal, start, end, symbols, preset):
     rets = (finals / 100.0 - 1.0).sort_values(ascending=False)
     lead, lag = rets.index[0], rets.index[-1]
     _headline(
-        f"Over {preset}, <b>{ui.esc(_name(directory, lead))}</b> returned "
+        f"Over {p.preset}, <b>{ui.esc(_name(directory, lead))}</b> returned "
         f"<b>{ui.fmt_pct(rets.iloc[0], 1)}</b> versus "
         f"<b>{ui.fmt_pct(rets.iloc[-1], 1)}</b> for "
         f"<b>{ui.esc(_name(directory, lag))}</b>."
@@ -218,7 +258,7 @@ def compare(directory, pal, start, end, symbols, preset):
 
     cards = []
     for sym in syms:
-        ws = dal.window_stats(sym, start, end)
+        ws = dal.window_stats(sym, p.start, p.end)
         if ws is None:
             continue
         cards.append({
@@ -232,7 +272,7 @@ def compare(directory, pal, start, end, symbols, preset):
 
     wide = charts.comparison_needs_log(pivot)
     fig = charts.indexed_comparison(pivot, pal, log=wide)
-    charts.add_events(fig, pal, events.in_range(start, end), label=False)
+    charts.add_events(fig, pal, events.in_range(p.start, p.end), label=False)
     ui.chart(fig, key="ans_cmp", config=PLOT_CONFIG,
              caption="Rebased to 100 at the window start so different price levels are comparable")
     ui.note(
@@ -242,21 +282,21 @@ def compare(directory, pal, start, end, symbols, preset):
     )
 
 
-def company_detail(directory, pal, start, end, symbols, preset):
-    if not symbols:
+def company_detail(directory, pal, p):
+    if not p.symbols:
         return st.info("Name a company, e.g. “How did Nvidia perform?”")
-    sym = symbols[0]
+    sym = p.symbols[0]
     s_min, _ = dal.date_bounds(sym)
-    cs = max(pd.to_datetime(start).date(), s_min).isoformat()
+    cs = max(pd.to_datetime(p.start).date(), s_min).isoformat()
 
-    ws = dal.window_stats(sym, cs, end)
+    ws = dal.window_stats(sym, cs, p.end)
     q = dal.quote(sym)
     if ws is None or q is None:
         return st.warning(f"No data for {sym} in this window.")
 
     _headline(
         f"<b>{ui.esc(_name(directory, sym))} ({ui.esc(sym)})</b> returned "
-        f"<b>{ui.fmt_pct(ws['period_return'], 1)}</b> over {preset}, "
+        f"<b>{ui.fmt_pct(ws['period_return'], 1)}</b> over {p.preset}, "
         f"with a worst drawdown of <b>{ui.fmt_pct(ws['max_drawdown'], 1)}</b>."
     )
     ui.kpi_cards([
@@ -275,27 +315,30 @@ def company_detail(directory, pal, start, end, symbols, preset):
          "foot": f"{ui.fmt_dollar_compact(ws['avg_dollar_volume'])} turnover"},
     ])
 
-    px = dal.prices(sym, cs, end)
+    px = dal.prices(sym, cs, p.end)
     if not px.empty:
         fig = charts.price_line(px, pal, label=ui.fmt_price(px["close"].iloc[-1]))
-        charts.add_events(fig, pal, events.in_range(cs, end))
+        charts.add_events(fig, pal, events.in_range(cs, p.end))
         ui.chart(fig, key="ans_co", config=PLOT_CONFIG,
-                 caption=f"{sym} price over {preset}")
+                 caption=f"{sym} price over {p.preset}")
 
 
-def sector(directory, pal, start, end, symbols, preset):
-    df = dal.sector_performance(start, end)
+def sector(directory, pal, p):
+    df = dal.sector_performance(p.start, p.end)
     if df.empty:
         return st.warning("No data in this window.")
-    df = df.sort_values("median_return", ascending=False)
+    df = df.sort_values("median_return", ascending=not _descending(p, True))
     top, bottom = df.iloc[0], df.iloc[-1]
     _headline(
-        f"<b>{ui.esc(top['sector'])}</b> led over {preset} with a median member return of "
-        f"<b>{ui.fmt_pct(top['median_return'], 1)}</b>; "
+        f"<b>{ui.esc(top['sector'])}</b> led over {ui.esc(p.preset)} with a median member "
+        f"return of <b>{ui.fmt_pct(top['median_return'], 1)}</b>; "
         f"<b>{ui.esc(bottom['sector'])}</b> lagged at "
         f"<b>{ui.fmt_pct(bottom['median_return'], 1)}</b>."
     )
-    ui.chart(charts.sector_bars(df, pal), key="ans_sector", config=PLOT_CONFIG,
+    # A stated count trims the chart; the default leaves every sector visible,
+    # since the comparison between them is the point of this answer.
+    shown = df.head(p.limit) if p.source("limit") == "question" else df
+    ui.chart(charts.sector_bars(shown, pal), key="ans_sector", config=PLOT_CONFIG,
              controls=False)
     ui.note(
         "Median member return, not the mean — over long windows one very large "
@@ -303,18 +346,18 @@ def sector(directory, pal, start, end, symbols, preset):
     )
 
 
-def market_summary(directory, pal, start, end, symbols, preset):
-    ws = dal.window_stats(INDEX_SYMBOL, start, end)
-    movers = _movers(start, end)
+def market_summary(directory, pal, p):
+    ws = dal.window_stats(INDEX_SYMBOL, p.start, p.end)
+    movers = dal.movers_ranked(p.start, p.end, sector=p.sector, limit=-1)
     if ws is None:
         return st.warning("No data in this window.")
     adv = int((movers["period_return"] > 0).sum()) if not movers.empty else 0
     _headline(
-        f"The S&P 500 returned <b>{ui.fmt_pct(ws['period_return'], 1)}</b> over {preset}, "
+        f"The S&P 500 returned <b>{ui.fmt_pct(ws['period_return'], 1)}</b> over {p.preset}, "
         f"with <b>{adv} of {len(movers)}</b> companies advancing."
     )
     ui.kpi_cards([
-        {"icon": "📅", "label": f"Return · {preset}", "value": ui.fmt_pct(ws["period_return"], 1),
+        {"icon": "📅", "label": f"Return · {p.preset}", "value": ui.fmt_pct(ws["period_return"], 1),
          "foot": f"{int(ws['trading_days']):,} sessions"},
         {"icon": "📈", "label": "CAGR", "value": ui.fmt_pct(ws["cagr"], 1),
          "foot": "Annualized"},
@@ -323,10 +366,10 @@ def market_summary(directory, pal, start, end, symbols, preset):
         {"icon": "📉", "label": "Max drawdown", "value": ui.fmt_pct(ws["max_drawdown"], 1),
          "change_dir": "down", "change": "peak to trough", "foot": "Deepest fall"},
     ])
-    px = dal.prices(INDEX_SYMBOL, start, end)
+    px = dal.prices(INDEX_SYMBOL, p.start, p.end)
     if not px.empty:
         fig = charts.price_line(px, pal, label=ui.fmt_price(px["close"].iloc[-1], 0))
-        charts.add_events(fig, pal, events.in_range(start, end))
+        charts.add_events(fig, pal, events.in_range(p.start, p.end))
         ui.chart(fig, key="ans_mkt", config=PLOT_CONFIG,
                  caption="Index level with market events marked")
 

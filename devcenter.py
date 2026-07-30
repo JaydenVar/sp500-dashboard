@@ -697,8 +697,13 @@ def _query_router() -> None:
         st.dataframe(
             pd.DataFrame(log[::-1]).rename(columns={
                 "question": "Question", "path": "Path", "intent": "Intent",
-                "source": "Parsed by", "detail": "Detail", "ms": "ms"}),
+                "source": "Parsed by", "detail": "Detail",
+                "params": "Resolved parameters", "ms": "ms"}),
             width="stretch", hide_index=True,
+        )
+        st.caption(
+            "Each parameter is tagged with the tier that won it: `question` beat the "
+            "sidebar, `ui` inherited the current window, `default` had neither."
         )
 
     # The generated statement, disclosed here and nowhere else. User Mode shows
