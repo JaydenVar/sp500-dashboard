@@ -1,0 +1,6 @@
+.venv/
+__pycache__/
+
+# The SQLite DB is a build artifact — app.py rebuilds it from the CSV on first
+# run. The CSV itself IS committed, so a fresh deploy has its source data.
+data/sp500.db
