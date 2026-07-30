@@ -1,163 +1,326 @@
-"""Load the S&P 500 CSV into SQLite and derive analysis tables entirely in SQL."""
+"""Load the price/symbol CSVs into SQLite and derive every analysis table in SQL.
+
+The analysis lives in views, not in Python. Views are partitioned by symbol so
+the same SQL serves the index and every equity.
+"""
 
 from __future__ import annotations
 
 import csv
+import gzip
 import sqlite3
 from pathlib import Path
 
 from db import get_connection
 
 DATA_DIR = Path(__file__).parent / "data"
-CSV_PATH = DATA_DIR / "sp500_daily.csv"
+PRICES_GZ = DATA_DIR / "prices.csv.gz"
+PRICES_CSV = DATA_DIR / "prices.csv"  # accepted if present, but not what ships
+SYMBOLS_CSV = DATA_DIR / "symbols.csv"
 DB_PATH = DATA_DIR / "sp500.db"
+
+
+def _open_prices():
+    """Prefer the committed gzip; fall back to a plain CSV if one is lying around."""
+    if PRICES_GZ.exists():
+        return gzip.open(PRICES_GZ, "rt", newline="")
+    if PRICES_CSV.exists():
+        return PRICES_CSV.open(newline="")
+    raise FileNotFoundError(f"Missing {PRICES_GZ} (or {PRICES_CSV}). Run fetch_data.py first.")
 
 SCHEMA_SQL = """
 DROP TABLE IF EXISTS prices;
 CREATE TABLE prices (
-    date TEXT PRIMARY KEY,
-    open REAL,
-    high REAL,
-    low REAL,
-    close REAL,
+    symbol    TEXT NOT NULL,
+    date      TEXT NOT NULL,
+    open      REAL,
+    high      REAL,
+    low       REAL,
+    close     REAL,
     adj_close REAL,
-    volume INTEGER
+    volume    INTEGER,
+    PRIMARY KEY (symbol, date)
+);
+
+DROP TABLE IF EXISTS symbols;
+CREATE TABLE symbols (
+    symbol   TEXT PRIMARY KEY,
+    name     TEXT NOT NULL,
+    sector   TEXT,
+    industry TEXT,
+    is_index INTEGER NOT NULL DEFAULT 0
 );
 """
 
-# Everything below is plain SQL (views), computed once when the DB is built.
+INDEXES_SQL = """
+CREATE INDEX IF NOT EXISTS idx_prices_symbol_date ON prices(symbol, date);
+CREATE INDEX IF NOT EXISTS idx_prices_date        ON prices(date);
+"""
+
 VIEWS_SQL = """
+-- Per-symbol daily return.
 DROP VIEW IF EXISTS daily_returns;
 CREATE VIEW daily_returns AS
 SELECT
+    symbol,
     date,
     close,
     volume,
-    (close - LAG(close) OVER (ORDER BY date)) / LAG(close) OVER (ORDER BY date) AS daily_return
-FROM prices;
+    (close - LAG(close) OVER w) / LAG(close) OVER w AS daily_return
+FROM prices
+WINDOW w AS (PARTITION BY symbol ORDER BY date);
 
-DROP VIEW IF EXISTS running_peak;
-CREATE VIEW running_peak AS
-SELECT
-    date,
-    close,
-    MAX(close) OVER (ORDER BY date ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS peak_close
-FROM prices;
-
+-- Running all-time high per symbol, and distance below it.
 DROP VIEW IF EXISTS drawdowns;
 CREATE VIEW drawdowns AS
-SELECT
-    date,
-    close,
-    peak_close,
-    (close - peak_close) / peak_close AS drawdown
-FROM running_peak;
-
-DROP VIEW IF EXISTS yearly_summary;
-CREATE VIEW yearly_summary AS
-WITH bounds AS (
+WITH peaks AS (
     SELECT
-        substr(date, 1, 4) AS year,
-        MIN(date) AS first_date,
-        MAX(date) AS last_date
+        symbol, date, close,
+        MAX(close) OVER (PARTITION BY symbol ORDER BY date
+                         ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS peak_close
     FROM prices
-    GROUP BY substr(date, 1, 4)
-),
-year_prices AS (
-    SELECT
-        b.year,
-        (SELECT close FROM prices WHERE date = b.first_date) AS open_close,
-        (SELECT close FROM prices WHERE date = b.last_date) AS close_close,
-        (SELECT MAX(close) FROM prices WHERE substr(date,1,4) = b.year) AS year_high,
-        (SELECT MIN(close) FROM prices WHERE substr(date,1,4) = b.year) AS year_low,
-        (SELECT AVG(volume) FROM prices WHERE substr(date,1,4) = b.year) AS avg_volume,
-        (SELECT COUNT(*) FROM prices WHERE substr(date,1,4) = b.year) AS trading_days
-    FROM bounds b
 )
-SELECT
-    year,
-    open_close,
-    close_close,
-    year_high,
-    year_low,
-    avg_volume,
-    trading_days,
-    (close_close - open_close) / open_close AS year_return,
-    -- A US equity year has ~250 sessions. Fewer means the dataset only covers
-    -- part of it, so the return is not a calendar-year figure.
-    CASE WHEN trading_days < 240 THEN 1 ELSE 0 END AS is_partial
-FROM year_prices
-ORDER BY year;
+SELECT symbol, date, close, peak_close,
+       (close - peak_close) / peak_close AS drawdown
+FROM peaks;
 
-DROP VIEW IF EXISTS monthly_returns;
-CREATE VIEW monthly_returns AS
-WITH bounds AS (
-    SELECT
-        substr(date, 1, 7) AS year_month,
-        MIN(date) AS first_date,
-        MAX(date) AS last_date
-    FROM prices
-    GROUP BY substr(date, 1, 7)
-)
+-- Moving averages and 21-session annualized volatility.
+DROP VIEW IF EXISTS moving_averages;
+CREATE VIEW moving_averages AS
 SELECT
-    b.year_month,
-    substr(b.year_month, 1, 4) AS year,
-    substr(b.year_month, 6, 2) AS month,
-    (SELECT close FROM prices WHERE date = b.first_date) AS open_close,
-    (SELECT close FROM prices WHERE date = b.last_date) AS close_close,
-    ((SELECT close FROM prices WHERE date = b.last_date) - (SELECT close FROM prices WHERE date = b.first_date))
-        / (SELECT close FROM prices WHERE date = b.first_date) AS month_return
-FROM bounds b
-ORDER BY b.year_month;
+    symbol, date, close,
+    CASE WHEN COUNT(*)  OVER w50  = 50  THEN AVG(close) OVER w50  END AS ma_50,
+    CASE WHEN COUNT(*)  OVER w200 = 200 THEN AVG(close) OVER w200 END AS ma_200
+FROM prices
+WINDOW
+    w50  AS (PARTITION BY symbol ORDER BY date ROWS BETWEEN 49  PRECEDING AND CURRENT ROW),
+    w200 AS (PARTITION BY symbol ORDER BY date ROWS BETWEEN 199 PRECEDING AND CURRENT ROW);
 
 DROP VIEW IF EXISTS rolling_volatility;
 CREATE VIEW rolling_volatility AS
 WITH r AS (
-    SELECT date, daily_return FROM daily_returns WHERE daily_return IS NOT NULL
+    SELECT symbol, date, daily_return
+    FROM daily_returns
+    WHERE daily_return IS NOT NULL
 ),
 stats AS (
     SELECT
-        date,
-        AVG(daily_return) OVER w AS avg_ret,
-        AVG(daily_return * daily_return) OVER w AS avg_sq_ret
+        symbol, date,
+        AVG(daily_return) OVER w              AS avg_ret,
+        AVG(daily_return * daily_return) OVER w AS avg_sq,
+        COUNT(*) OVER w                       AS n
     FROM r
-    WINDOW w AS (ORDER BY date ROWS BETWEEN 20 PRECEDING AND CURRENT ROW)
+    WINDOW w AS (PARTITION BY symbol ORDER BY date ROWS BETWEEN 20 PRECEDING AND CURRENT ROW)
+)
+SELECT symbol, date,
+       CASE WHEN n = 21
+            THEN SQRT(MAX(avg_sq - avg_ret * avg_ret, 0)) * SQRT(252)
+       END AS ann_volatility_21d
+FROM stats;
+
+-- Calendar-year summary per symbol, with a partial-year flag: a US equity year
+-- runs ~250 sessions, so fewer means the window only covers part of it and the
+-- return is not a calendar-year figure.
+DROP VIEW IF EXISTS yearly_summary;
+CREATE VIEW yearly_summary AS
+WITH bounds AS (
+    SELECT symbol, substr(date, 1, 4) AS year,
+           MIN(date) AS first_date, MAX(date) AS last_date, COUNT(*) AS trading_days
+    FROM prices
+    GROUP BY symbol, substr(date, 1, 4)
+),
+agg AS (
+    SELECT symbol, substr(date, 1, 4) AS year,
+           MAX(close) AS year_high, MIN(close) AS year_low, AVG(volume) AS avg_volume
+    FROM prices
+    GROUP BY symbol, substr(date, 1, 4)
 )
 SELECT
-    date,
-    -- annualized volatility from a 21-day rolling window of daily returns
-    SQRT(MAX(avg_sq_ret - avg_ret * avg_ret, 0)) * SQRT(252) AS ann_volatility_21d
-FROM stats;
+    b.symbol, b.year,
+    fo.close AS open_close,
+    lc.close AS close_close,
+    a.year_high, a.year_low, a.avg_volume, b.trading_days,
+    (lc.close - fo.close) / fo.close AS year_return,
+    CASE WHEN b.trading_days < 240 THEN 1 ELSE 0 END AS is_partial
+FROM bounds b
+JOIN agg a  ON a.symbol = b.symbol AND a.year = b.year
+JOIN prices fo ON fo.symbol = b.symbol AND fo.date = b.first_date
+JOIN prices lc ON lc.symbol = b.symbol AND lc.date = b.last_date;
+
+DROP VIEW IF EXISTS monthly_returns;
+CREATE VIEW monthly_returns AS
+WITH bounds AS (
+    SELECT symbol, substr(date, 1, 7) AS year_month,
+           MIN(date) AS first_date, MAX(date) AS last_date
+    FROM prices
+    GROUP BY symbol, substr(date, 1, 7)
+)
+SELECT
+    b.symbol, b.year_month,
+    substr(b.year_month, 1, 4) AS year,
+    substr(b.year_month, 6, 2) AS month,
+    (lc.close - fo.close) / fo.close AS month_return
+FROM bounds b
+JOIN prices fo ON fo.symbol = b.symbol AND fo.date = b.first_date
+JOIN prices lc ON lc.symbol = b.symbol AND lc.date = b.last_date;
+
+-- One row per symbol: the leaderboard/screener source. Period figures are over
+-- each symbol's OWN available history, so `first_date`/`years` are exposed --
+-- a 2012-listed name has not had the same run as a 2001-listed one.
+--
+-- Defined as a view for readability, then MATERIALIZED into a table below: it
+-- rolls up every window function over all ~300k rows, which measured ~2.1s as a
+-- live view versus ~1ms as a table. The inputs only change when the DB is
+-- rebuilt, so there is nothing to invalidate.
+DROP VIEW IF EXISTS symbol_stats_v;
+CREATE VIEW symbol_stats_v AS
+WITH bounds AS (
+    SELECT symbol, MIN(date) AS first_date, MAX(date) AS last_date, COUNT(*) AS trading_days
+    FROM prices GROUP BY symbol
+),
+ret AS (
+    SELECT symbol,
+           AVG(daily_return) AS mean_ret,
+           AVG(daily_return * daily_return) AS mean_sq
+    FROM daily_returns WHERE daily_return IS NOT NULL GROUP BY symbol
+),
+extremes AS (
+    SELECT symbol, MAX(close) AS highest_close, MIN(close) AS lowest_close,
+           AVG(volume) AS avg_volume, AVG(close * volume) AS avg_dollar_volume
+    FROM prices GROUP BY symbol
+),
+worst AS (
+    SELECT symbol, MIN(drawdown) AS max_drawdown FROM drawdowns GROUP BY symbol
+),
+latest_vol AS (
+    SELECT symbol, ann_volatility_21d FROM (
+        SELECT symbol, ann_volatility_21d,
+               ROW_NUMBER() OVER (PARTITION BY symbol ORDER BY date DESC) AS rn
+        FROM rolling_volatility WHERE ann_volatility_21d IS NOT NULL
+    ) WHERE rn = 1
+),
+prev AS (
+    SELECT symbol, daily_return FROM (
+        SELECT symbol, daily_return,
+               ROW_NUMBER() OVER (PARTITION BY symbol ORDER BY date DESC) AS rn
+        FROM daily_returns WHERE daily_return IS NOT NULL
+    ) WHERE rn = 1
+)
+SELECT
+    s.symbol, s.name, s.sector, s.industry, s.is_index,
+    b.first_date, b.last_date, b.trading_days,
+    fo.close AS first_close,
+    lc.close AS last_close,
+    (lc.close - fo.close) / fo.close AS total_return,
+    (julianday(b.last_date) - julianday(b.first_date)) / 365.25 AS years,
+    POWER(lc.close / fo.close,
+          1.0 / MAX((julianday(b.last_date) - julianday(b.first_date)) / 365.25, 0.01)) - 1 AS cagr,
+    SQRT(MAX(r.mean_sq - r.mean_ret * r.mean_ret, 0)) * SQRT(252) AS ann_volatility,
+    w.max_drawdown,
+    lv.ann_volatility_21d AS current_volatility,
+    p.daily_return AS last_daily_return,
+    e.highest_close, e.lowest_close, e.avg_volume, e.avg_dollar_volume
+FROM symbols s
+JOIN bounds b  ON b.symbol = s.symbol
+JOIN prices fo ON fo.symbol = s.symbol AND fo.date = b.first_date
+JOIN prices lc ON lc.symbol = s.symbol AND lc.date = b.last_date
+JOIN ret r     ON r.symbol = s.symbol
+JOIN extremes e ON e.symbol = s.symbol
+LEFT JOIN worst w      ON w.symbol = s.symbol
+LEFT JOIN latest_vol lv ON lv.symbol = s.symbol
+LEFT JOIN prev p        ON p.symbol = s.symbol;
+"""
+
+# Materialize the expensive rollup. Run after VIEWS_SQL.
+MATERIALIZE_SQL = """
+DROP TABLE IF EXISTS symbol_stats;
+CREATE TABLE symbol_stats AS SELECT * FROM symbol_stats_v;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_symbol_stats ON symbol_stats(symbol);
+
+-- Latest session per symbol plus its prior close, for the quote strip. Reading
+-- this instead of joining the daily_returns view took that lookup 286ms -> ~1ms.
+DROP TABLE IF EXISTS latest_quote;
+CREATE TABLE latest_quote AS
+WITH ranked AS (
+    SELECT symbol, date, open, high, low, close, volume,
+           ROW_NUMBER() OVER (PARTITION BY symbol ORDER BY date DESC) AS rn,
+           LAG(close) OVER (PARTITION BY symbol ORDER BY date DESC) AS next_close
+    FROM prices
+),
+w52 AS (
+    SELECT p.symbol, MAX(p.high) AS w52_high, MIN(p.low) AS w52_low
+    FROM prices p
+    JOIN (SELECT symbol, MAX(date) AS d FROM prices GROUP BY symbol) l
+      ON l.symbol = p.symbol
+    WHERE p.date >= date(l.d, '-1 year')
+    GROUP BY p.symbol
+),
+prevclose AS (
+    SELECT symbol, close AS prev_close FROM ranked WHERE rn = 2
+)
+SELECT
+    r.symbol, r.date, r.open, r.high, r.low, r.close, r.volume,
+    pc.prev_close,
+    CASE WHEN pc.prev_close IS NOT NULL AND pc.prev_close <> 0
+         THEN (r.close - pc.prev_close) / pc.prev_close END AS daily_return,
+    w.w52_high, w.w52_low
+FROM ranked r
+LEFT JOIN prevclose pc ON pc.symbol = r.symbol
+LEFT JOIN w52 w        ON w.symbol = r.symbol
+WHERE r.rn = 1;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_latest_quote ON latest_quote(symbol);
 """
 
 
-def load_csv(conn: sqlite3.Connection) -> int:
-    with CSV_PATH.open() as f:
+def _load_prices(conn: sqlite3.Connection) -> int:
+    with _open_prices() as f:
+        rows = [
+            (r["symbol"], r["date"], r["open"], r["high"], r["low"],
+             r["close"], r["adj_close"], r["volume"])
+            for r in csv.DictReader(f)
+        ]
+    conn.executemany(
+        "INSERT OR REPLACE INTO prices"
+        " (symbol, date, open, high, low, close, adj_close, volume)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        rows,
+    )
+    return len(rows)
+
+
+def _load_symbols(conn: sqlite3.Connection) -> int:
+    with SYMBOLS_CSV.open() as f:
         reader = csv.DictReader(f)
         rows = [
-            (r["date"], r["open"], r["high"], r["low"], r["close"], r["adj_close"], r["volume"])
+            (r["symbol"], r["name"], r["sector"], r["industry"], int(r["is_index"]))
             for r in reader
         ]
     conn.executemany(
-        "INSERT INTO prices (date, open, high, low, close, adj_close, volume) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        "INSERT OR REPLACE INTO symbols (symbol, name, sector, industry, is_index)"
+        " VALUES (?, ?, ?, ?, ?)",
         rows,
     )
     return len(rows)
 
 
 def main() -> None:
-    if not CSV_PATH.exists():
-        raise FileNotFoundError(f"Missing {CSV_PATH}. Run fetch_data.py first.")
+    if not SYMBOLS_CSV.exists():
+        raise FileNotFoundError(f"Missing {SYMBOLS_CSV}. Run fetch_data.py first.")
 
     if DB_PATH.exists():
         DB_PATH.unlink()
+
     conn = get_connection(DB_PATH)
     try:
         conn.executescript(SCHEMA_SQL)
-        n = load_csv(conn)
+        n_prices = _load_prices(conn)
+        n_symbols = _load_symbols(conn)
+        conn.executescript(INDEXES_SQL)
         conn.executescript(VIEWS_SQL)
+        conn.executescript(MATERIALIZE_SQL)
+        conn.execute("ANALYZE")
         conn.commit()
-        print(f"Loaded {n} rows into {DB_PATH}")
+        print(f"Loaded {n_prices:,} price rows across {n_symbols} symbols -> {DB_PATH}")
     finally:
         conn.close()
 

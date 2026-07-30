@@ -1,8 +1,9 @@
-"""S&P 500 — 25-Year Dashboard.
+"""Market Analytics — a SQL-first equity dashboard.
 
-Every number on this page comes from a SQL query (see queries.py) run against a
-local SQLite database (see build_db.py) built from real Yahoo Finance history
-(see fetch_data.py). Streamlit + Plotly only render what SQL already computed.
+Every figure on screen is the output of a SQL query (see queries.py) against a
+local SQLite database whose analysis lives in views and materialized rollups
+(see build_db.py). Python queries and draws; it does no analysis of its own.
+The SQL Explorer tab shows each query, its explanation, and its measured runtime.
 """
 
 from __future__ import annotations
@@ -10,343 +11,686 @@ from __future__ import annotations
 import datetime as dt
 
 import pandas as pd
-import plotly.graph_objects as go
 import streamlit as st
 
-import build_db
+import charts
+import components as ui
+import data_access as dal
 import queries
-from db import DB_PATH, get_connection
-from theme import PALETTES, inject_css
+from charts import PLOT_CONFIG
+from theme import PALETTES, app_css
+from universe import INDEX_SYMBOL
 
-st.set_page_config(page_title="S&P 500 — 25-Year Dashboard", layout="wide")
+st.set_page_config(
+    page_title="Market Analytics — SQL Dashboard",
+    page_icon="📈",
+    layout="wide",
+    initial_sidebar_state="collapsed",
+)
 
+MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
-@st.cache_resource
-def ensure_db() -> str:
-    """Build the DB from the committed CSV if it isn't there yet.
-
-    The .db is a build artifact and isn't in version control, so a fresh deploy
-    starts without one. Cached so the build runs once per server, not per rerun.
-    Only the build is cached — a sqlite3 connection can't be shared across
-    Streamlit's threads, so each script run opens its own (cheap, and read-only).
-    """
-    if not DB_PATH.exists():
-        build_db.main()
-    return str(DB_PATH)
-
-
-ensure_db()
-conn = get_connection()
-
-# ---------------------------------------------------------------------------
-# Top control row: theme + date range. Filters scope everything below them.
-# ---------------------------------------------------------------------------
-ctrl_left, ctrl_right = st.columns([3, 1])
-with ctrl_right:
-    mode_name = st.radio("Theme", list(PALETTES.keys()), horizontal=True, label_visibility="collapsed")
-pal = PALETTES[mode_name]
-st.markdown(inject_css(pal), unsafe_allow_html=True)
-
-bounds = conn.execute(queries.DATE_BOUNDS).fetchone()
-min_date = dt.date.fromisoformat(bounds[0])
-max_date = dt.date.fromisoformat(bounds[1])
-
-PRESETS = {
-    "YTD": dt.date(max_date.year, 1, 1),
-    "1Y": max_date - dt.timedelta(days=365),
-    "5Y": max_date - dt.timedelta(days=365 * 5),
-    "10Y": max_date - dt.timedelta(days=365 * 10),
-    "25Y / All": min_date,
+# Date presets. Value is (label -> lookback in days | sentinel).
+PRESETS: dict[str, object] = {
+    "1M": 30, "3M": 91, "6M": 182, "YTD": "ytd",
+    "1Y": 365, "3Y": 1095, "5Y": 1826, "10Y": 3653, "MAX": "max",
 }
+DEFAULT_PRESET = "MAX"
 
-with ctrl_left:
-    preset = st.radio("Date range", list(PRESETS.keys()), index=4, horizontal=True)
 
-start_date = max(PRESETS[preset], min_date)
-end_date = max_date
+def resolve_range(preset: str, min_d: dt.date, max_d: dt.date) -> tuple[dt.date, dt.date]:
+    if preset == "max":
+        return min_d, max_d
+    if preset == "ytd":
+        return max(dt.date(max_d.year, 1, 1), min_d), max_d
+    spec = PRESETS.get(preset, "max")
+    if spec == "max":
+        return min_d, max_d
+    if spec == "ytd":
+        return max(dt.date(max_d.year, 1, 1), min_d), max_d
+    return max(max_d - dt.timedelta(days=int(spec)), min_d), max_d
 
-st.title("S&P 500 — 25-Year Dashboard")
-st.markdown(
-    f"<span class='sp500-caption'>Data: {min_date.isoformat()} to {max_date.isoformat()} "
-    f"&middot; showing {start_date.isoformat()} to {end_date.isoformat()} &middot; "
-    "all figures computed in SQLite via SQL views (see the Data &amp; SQL tab)</span>",
-    unsafe_allow_html=True,
+
+# ---------------------------------------------------------------------------
+# Theme + chrome
+# ---------------------------------------------------------------------------
+if "theme" not in st.session_state:
+    st.session_state.theme = "Light"
+
+pal = PALETTES[st.session_state.theme]
+st.markdown(app_css(pal), unsafe_allow_html=True)
+
+directory = dal.directory()
+equities = directory[directory["is_index"] == 0].reset_index(drop=True)
+last_date = dal.global_last_date()
+
+ui.header(
+    "Market Analytics",
+    "S&P 500 index and large-cap equities · 25 years of daily history, analyzed in SQL",
+    last_date,
+    len(directory),
 )
 
 # ---------------------------------------------------------------------------
-# Data pulls
+# Control row — one row, above everything it scopes
 # ---------------------------------------------------------------------------
-prices = pd.read_sql(queries.PRICES_IN_RANGE, conn, params={"start": start_date.isoformat(), "end": end_date.isoformat()})
-drawdowns = pd.read_sql(queries.DRAWDOWN_IN_RANGE, conn, params={"start": start_date.isoformat(), "end": end_date.isoformat()})
-volatility = pd.read_sql(queries.VOLATILITY_IN_RANGE, conn, params={"start": start_date.isoformat(), "end": end_date.isoformat()})
-yearly = pd.read_sql(queries.YEARLY_SUMMARY, conn)
-monthly = pd.read_sql(queries.MONTHLY_RETURNS, conn)
-headline = conn.execute(queries.HEADLINE_STATS).fetchone()
-ytd = conn.execute(queries.YTD_RETURN).fetchone()
-
-(
-    first_date, last_date, first_close, last_close, trading_days,
-    all_time_high, current_drawdown, max_drawdown, ann_vol_full, cagr,
-) = headline
-ytd_return = ytd[2]
-
-for df in (prices, drawdowns, volatility):
-    df["date"] = pd.to_datetime(df["date"])
-
-MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
-
-
-def fmt_pct(x: float) -> str:
-    return f"{x * 100:+.1f}%"
-
-
-def wash(hexcolor: str, alpha: float = 0.10) -> str:
-    """Series hue at ~10% opacity for an area fill — a wash, never a saturated block."""
-    h = hexcolor.lstrip("#")
-    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
-    return f"rgba({r},{g},{b},{alpha})"
-
-
-def color_key(items: list[tuple[str, str]]) -> None:
-    """items: list of (label, hex). Renders swatch + ink-colored text, never colored text."""
-    spans = "".join(
-        f"<span style='display:inline-flex;align-items:center;margin-right:16px;'>"
-        f"<span style='width:10px;height:10px;border-radius:2px;background:{hexcolor};"
-        f"display:inline-block;margin-right:6px;'></span>"
-        f"<span style='color:{pal['text_secondary']};font-size:0.85rem;'>{label}</span></span>"
-        for label, hexcolor in items
+ctl = st.columns([5.2, 1.5, 1.15])
+with ctl[0]:
+    preset = st.radio(
+        "Date range", list(PRESETS), index=list(PRESETS).index(DEFAULT_PRESET),
+        horizontal=True, key="preset", label_visibility="collapsed",
     )
-    st.markdown(f"<div style='margin-top:-8px;margin-bottom:8px;'>{spans}</div>", unsafe_allow_html=True)
-
-
-def base_layout(fig: go.Figure, y_title: str = "") -> go.Figure:
-    fig.update_layout(
-        template=pal["plotly_template"],
-        paper_bgcolor=pal["surface"],
-        plot_bgcolor=pal["surface"],
-        font=dict(color=pal["text_primary"], family="system-ui, -apple-system, 'Segoe UI', sans-serif"),
-        margin=dict(l=10, r=10, t=10, b=10),
-        hoverlabel=dict(bgcolor=pal["surface"], font_color=pal["text_primary"], bordercolor=pal["border"]),
-        showlegend=False,
+with ctl[1]:
+    theme_choice = st.radio(
+        "Theme", ["Light", "Dark"], horizontal=True, label_visibility="collapsed",
+        index=0 if st.session_state.theme == "Light" else 1, key="theme_pick",
     )
-    fig.update_xaxes(showgrid=False, showline=True, linecolor=pal["baseline"], linewidth=1, tickfont=dict(color=pal["muted"]))
-    fig.update_yaxes(
-        title=y_title,
-        showgrid=True, gridcolor=pal["gridline"], gridwidth=1, griddash="solid",
-        zeroline=False, tickfont=dict(color=pal["muted"]), title_font=dict(color=pal["muted"]),
-    )
-    return fig
+    if theme_choice != st.session_state.theme:
+        st.session_state.theme = theme_choice
+        st.rerun()
+with ctl[2]:
+    if st.button("↺ Reset view", use_container_width=True,
+                 help="Restore the default date range and clear chart zoom/pan"):
+        for k in ("preset", "cmp_syms", "co_symbol"):
+            st.session_state.pop(k, None)
+        st.rerun()
+
+index_min, index_max = dal.date_bounds(INDEX_SYMBOL)
+start_d, end_d = resolve_range(preset, index_min, index_max)
+START, END = start_d.isoformat(), end_d.isoformat()
+
+st.markdown(
+    f'<div class="note">Window <b>{start_d:%b %d, %Y}</b> → <b>{end_d:%b %d, %Y}</b>'
+    f' · {preset} · filters scope every tab below</div>',
+    unsafe_allow_html=True,
+)
+
+SECTIONS = ["Overview", "Market", "Companies", "Performance", "Risk", "SQL Explorer", "About"]
+
+# Deliberately a radio, not st.tabs. st.tabs renders EVERY tab's body on every
+# rerun, which (a) runs all seven sections' queries when only one is visible and
+# (b) makes Plotly measure charts inside hidden tabs, so they render at a
+# fraction of the container width. Rendering only the active section fixes both.
+section = st.radio(
+    "Section", SECTIONS, horizontal=True, key="section", label_visibility="collapsed",
+)
 
 
 # ---------------------------------------------------------------------------
-# KPI row (stat tiles) — deltas use status ink, never as a fill on the mark
+# Overview — the index
 # ---------------------------------------------------------------------------
-k1, k2, k3, k4, k5, k6 = st.columns(6)
-delta_color = pal["good_text"] if ytd_return >= 0 else pal["bad_text"]
-k1.metric("Current close", f"{last_close:,.0f}", f"{fmt_pct(ytd_return)} YTD")
-k2.metric("25Y CAGR", fmt_pct(cagr))
-k3.metric("All-time high", f"{all_time_high:,.0f}")
-k4.metric("Current drawdown", fmt_pct(current_drawdown))
-k5.metric("Max drawdown (25Y)", fmt_pct(max_drawdown))
-k6.metric("Ann. volatility (21d)", f"{volatility['ann_volatility_21d'].iloc[-1] * 100:.1f}%" if not volatility.empty else "—")
+if section == "Overview":
+    q = dal.quote(INDEX_SYMBOL)
+    ws = dal.window_stats(INDEX_SYMBOL, START, END)
+    px = dal.prices(INDEX_SYMBOL, START, END)
 
-st.divider()
-
-tab_overview, tab_returns, tab_risk, tab_data = st.tabs(["Overview", "Returns", "Risk", "Data & SQL"])
-
-# ---------------------------------------------------------------------------
-# Overview: price trend
-# ---------------------------------------------------------------------------
-with tab_overview:
-    scale = st.radio("Scale", ["Linear", "Log"], horizontal=True)
-    fig = go.Figure()
-    fig.add_trace(
-        go.Scatter(
-            x=prices["date"], y=prices["close"], mode="lines",
-            line=dict(color=pal["blue"], width=2, shape="linear"),
-            hovertemplate="%{y:,.0f}<extra></extra>",
-            name="S&P 500",
-        )
-    )
-    fig.add_annotation(
-        x=prices["date"].iloc[-1], y=prices["close"].iloc[-1],
-        text=f"{prices['close'].iloc[-1]:,.0f}", showarrow=False,
-        xanchor="left", font=dict(color=pal["text_primary"], size=13), xshift=8,
-    )
-    if scale == "Log":
-        fig.update_yaxes(type="log")
-    fig.update_layout(hovermode="x unified")
-    fig = base_layout(fig, "Index level")
-    # A line needs no zero baseline (only bars do). Padding the data range keeps
-    # short ranges legible instead of flattening them against a 0 axis.
-    if scale == "Linear":
-        span = prices["close"].max() - prices["close"].min()
-        pad = span * 0.08 if span else 1
-        fig.update_yaxes(range=[prices["close"].min() - pad, prices["close"].max() + pad])
-    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
-
-    vol_fig = go.Figure()
-    vol_fig.add_trace(
-        go.Bar(x=prices["date"], y=prices["volume"], marker_color=pal["blue"], marker_line_width=0,
-               hovertemplate="%{y:,.0f}<extra></extra>")
-    )
-    vol_fig = base_layout(vol_fig, "Volume")
-    vol_fig.update_layout(height=180)
-    st.caption("Daily trading volume")
-    st.plotly_chart(vol_fig, use_container_width=True, config={"displayModeBar": False})
-
-# ---------------------------------------------------------------------------
-# Returns: yearly diverging bar + monthly seasonality heatmap
-# ---------------------------------------------------------------------------
-with tab_returns:
-    st.subheader("Calendar-year return")
-    y = yearly.copy()
-    y["partial"] = y["is_partial"] == 1
-    y["color"] = y["year_return"].apply(lambda v: pal["blue"] if v >= 0 else pal["red"])
-    # Partial years aren't calendar-year returns, so they must not read as one.
-    y["opacity"] = y["partial"].map({True: 0.45, False: 1.0})
-    y["tick"] = y.apply(lambda r: f"{r['year']}*" if r["partial"] else r["year"], axis=1)
-
-    key_items = [("Positive year", pal["blue"]), ("Negative year", pal["red"])]
-    color_key(key_items)
-    partial_years = y.loc[y["partial"], "year"].tolist()
-    if partial_years:
-        st.markdown(
-            f"<div class='sp500-caption' style='margin-top:-4px;margin-bottom:8px;'>"
-            f"* {', '.join(partial_years)} shown faded — the dataset covers only part of "
-            f"these years, so they are period returns, not full calendar years.</div>",
-            unsafe_allow_html=True,
+    if ws is None or px.empty or q is None:
+        st.warning("No data in the selected window.")
+    else:
+        ui.quote_strip(
+            "S&P 500 Index", INDEX_SYMBOL, q,
+            f"Index · latest session {pd.to_datetime(q['date']):%b %d, %Y}", pal,
         )
 
-    # Label only the extremes, and only among full years. These ride the bars as
-    # trace text: add_annotation() with a string x collapses a category axis's
-    # range in this Plotly version.
-    y["label"] = ""
-    full = y[~y["partial"]]
-    for idx in (full["year_return"].idxmax(), full["year_return"].idxmin()):
-        y.loc[idx, "label"] = fmt_pct(y.loc[idx, "year_return"])
+        ui.kpi_cards([
+            {"icon": "📅", "label": f"Return · {preset}", "value": ui.fmt_pct(ws["period_return"], 1),
+             "change": f"{ws['trading_days']:,} sessions", "change_dir": "flat",
+             "foot": "Close-to-close over the window"},
+            {"icon": "📈", "label": "CAGR", "value": ui.fmt_pct(ws["cagr"], 1),
+             "foot": "Annualized over the window"},
+            {"icon": "🏔", "label": "Window high", "value": ui.fmt_price(ws["period_high"], 0),
+             "foot": f"Low {ui.fmt_price(ws['period_low'], 0)}"},
+            {"icon": "📉", "label": "Max drawdown", "value": ui.fmt_pct(ws["max_drawdown"], 1),
+             "change": "peak to trough", "change_dir": "down",
+             "foot": "Deepest fall from a running high"},
+            {"icon": "〰", "label": "Volatility", "value": ui.fmt_pct(ws["ann_volatility"], 1, signed=False),
+             "foot": "Annualized, from daily returns"},
+            {"icon": "🔁", "label": "52-week range", "value": ui.fmt_price(q["w52_low"], 0), "small": True,
+             "foot": f"to {ui.fmt_price(q['w52_high'], 0)} · trailing 1y"},
+        ])
 
-    bar_fig = go.Figure()
-    bar_fig.add_trace(
-        go.Bar(
-            x=y["tick"], y=y["year_return"], marker_color=y["color"], marker_line_width=0,
-            marker_opacity=y["opacity"],
-            text=y["label"], textposition="outside", cliponaxis=False,
-            textfont=dict(color=pal["text_primary"], size=12),
-            hovertemplate="%{x}: %{y:.1%}<extra></extra>",
+        ui.section("Index level", f"{preset} · hover for the crosshair readout")
+        c1, c2 = st.columns([1, 1])
+        with c1:
+            scale = st.radio("Scale", ["Linear", "Log"], horizontal=True,
+                             key="ov_scale", label_visibility="collapsed")
+        fig = charts.price_line(px, pal, log=(scale == "Log"),
+                                label=ui.fmt_price(px["close"].iloc[-1], 0))
+        st.plotly_chart(fig, use_container_width=True, config=PLOT_CONFIG)
+
+        ui.section("Trading volume", "Daily share volume")
+        st.plotly_chart(charts.volume_bars(px, pal), use_container_width=True, config=PLOT_CONFIG)
+
+        ui.note(
+            "Drag to pan, drag-select to zoom, and use the toolbar (top-right on hover) to "
+            "zoom, autoscale, reset axes, or download the chart as a PNG."
         )
-    )
-    bar_fig.add_hline(y=0, line_color=pal["baseline"], line_width=1)
-    bar_fig = base_layout(bar_fig, "Return")
-    bar_fig.update_xaxes(type="category", tickangle=-45)
-    bar_fig.update_yaxes(tickformat=".0%")
-    bar_fig.update_layout(bargap=0.25)
-    st.plotly_chart(bar_fig, use_container_width=True, config={"displayModeBar": False})
 
-    st.subheader("Monthly seasonality")
-    pivot = monthly.pivot(index="year", columns="month", values="month_return")
-    pivot = pivot.reindex(columns=[f"{m:02d}" for m in range(1, 13)])
-    max_abs = float(pivot.abs().max().max())
-    heat_fig = go.Figure(
-        data=go.Heatmap(
-            z=pivot.values,
-            x=MONTH_NAMES,
-            y=pivot.index,
-            colorscale=[[0.0, pal["red"]], [0.5, pal["neutral_mid"]], [1.0, pal["blue"]]],
-            zmid=0, zmin=-max_abs, zmax=max_abs,
-            hovertemplate="%{y} %{x}: %{z:.1%}<extra></extra>",
-            colorbar=dict(title="Return", tickformat=".0%", outlinewidth=0, tickfont=dict(color=pal["muted"])),
-            xgap=2, ygap=2,
-        )
-    )
-    heat_fig.update_layout(
-        template=pal["plotly_template"], paper_bgcolor=pal["surface"], plot_bgcolor=pal["surface"],
-        font=dict(color=pal["text_primary"], family="system-ui, -apple-system, 'Segoe UI', sans-serif"),
-        margin=dict(l=10, r=10, t=10, b=10),
-        hoverlabel=dict(bgcolor=pal["surface"], font_color=pal["text_primary"], bordercolor=pal["border"]),
-    )
-    heat_fig.update_xaxes(showgrid=False, tickfont=dict(color=pal["muted"]))
-    heat_fig.update_yaxes(showgrid=False, autorange="reversed", tickfont=dict(color=pal["muted"]))
-    st.plotly_chart(heat_fig, use_container_width=True, config={"displayModeBar": False})
-
-    with st.expander("Monthly returns — table view"):
-        st.dataframe(pivot.style.format("{:+.1%}", na_rep="—"), use_container_width=True)
 
 # ---------------------------------------------------------------------------
-# Risk: drawdown underwater chart + rolling volatility
+# Market — breadth, sectors, movers
 # ---------------------------------------------------------------------------
-with tab_risk:
-    st.subheader("Drawdown from all-time high")
-    dd_fig = go.Figure()
-    dd_fig.add_trace(
-        go.Scatter(
-            x=drawdowns["date"], y=drawdowns["drawdown"], mode="lines",
-            line=dict(color=pal["red"], width=2), fill="tozeroy", fillcolor=wash(pal["red"]),
-            hovertemplate="%{y:.1%}<extra></extra>",
-        )
-    )
-    worst_row = drawdowns.loc[drawdowns["drawdown"].idxmin()]
-    dd_fig.add_annotation(
-        x=worst_row["date"], y=worst_row["drawdown"],
-        text=f"{worst_row['drawdown']*100:.1f}% ({worst_row['date'].date()})",
-        showarrow=True, arrowhead=0, ax=0, ay=-24,
-        font=dict(color=pal["text_primary"], size=12),
-    )
-    dd_fig.add_hline(y=0, line_color=pal["baseline"], line_width=1)
-    dd_fig.update_layout(hovermode="x unified")
-    dd_fig = base_layout(dd_fig, "Drawdown")
-    dd_fig.update_yaxes(tickformat=".0%")
-    st.plotly_chart(dd_fig, use_container_width=True, config={"displayModeBar": False})
+if section == "Market":
+    movers = dal.period_movers(START, END)
+    sectors = dal.sector_performance(START, END)
 
-    st.subheader("Rolling volatility (21-trading-day, annualized)")
-    vol_fig2 = go.Figure()
-    vol_fig2.add_trace(
-        go.Scatter(
-            x=volatility["date"], y=volatility["ann_volatility_21d"], mode="lines",
-            line=dict(color=pal["blue"], width=2),
-            hovertemplate="%{y:.1%}<extra></extra>",
+    if movers.empty:
+        st.warning("No symbols have data in this window.")
+    else:
+        adv = int((movers["period_return"] > 0).sum())
+        dec = int((movers["period_return"] < 0).sum())
+        med = float(movers["period_return"].median())
+        best, worst = movers.iloc[0], movers.iloc[-1]
+
+        ui.kpi_cards([
+            {"icon": "📊", "label": "Advancing", "value": f"{adv}",
+             "change": f"of {len(movers)}", "change_dir": "up", "foot": "Positive over the window"},
+            {"icon": "📉", "label": "Declining", "value": f"{dec}",
+             "change": f"of {len(movers)}", "change_dir": "down", "foot": "Negative over the window"},
+            {"icon": "🎯", "label": "Median return", "value": ui.fmt_pct(med, 1),
+             "foot": "Middle symbol, equal-weighted"},
+            {"icon": "🚀", "label": "Top gainer", "value": ui.esc(best["symbol"]), "small": True,
+             "change": ui.fmt_pct(best["period_return"], 1), "change_dir": "up",
+             "foot": str(best["name"])[:30]},
+            {"icon": "🔻", "label": "Worst decliner", "value": ui.esc(worst["symbol"]), "small": True,
+             "change": ui.fmt_pct(worst["period_return"], 1), "change_dir": "down",
+             "foot": str(worst["name"])[:30]},
+        ])
+
+        ui.section("Sector performance", f"Median member return · {preset}")
+        st.plotly_chart(charts.sector_bars(sectors, pal), use_container_width=True, config=PLOT_CONFIG)
+        ui.note(
+            "Median member return, not the mean: over long windows a mean of total "
+            "returns is dominated by one outlier (a single +85,000% name pulls a "
+            "sector 'average' into five figures), describing that stock rather than "
+            "the sector. Hover a bar for the mean, best and worst alongside. Members "
+            "are equal-weighted, not market-cap-weighted, since share counts aren't "
+            "available from the free data source."
         )
-    )
-    if not volatility.empty:
-        vol_fig2.add_annotation(
-            x=volatility["date"].iloc[-1], y=volatility["ann_volatility_21d"].iloc[-1],
-            text=f"{volatility['ann_volatility_21d'].iloc[-1]*100:.1f}%",
-            showarrow=False, xanchor="left", xshift=8, font=dict(color=pal["text_primary"], size=13),
+
+        ui.section("Movers", f"Every symbol ranked by {preset} return")
+        # Percent columns are scaled to whole percents here. Streamlit's "%%"
+        # number format only appends a literal '%' -- it does not multiply -- so
+        # passing raw fractions would understate every figure by 100x.
+        tbl = movers.assign(
+            Return=movers["period_return"] * 100,
+            Start=movers["start_close"].round(2),
+            End=movers["end_close"].round(2),
+            Liquidity=movers["avg_dollar_volume"],
+        )[["symbol", "name", "sector", "Start", "End", "Return", "Liquidity", "sessions"]]
+        tbl.columns = ["Ticker", "Company", "Sector", "Start", "End", "Return", "Avg $ vol", "Sessions"]
+        ui.data_table(
+            tbl, key="movers",
+            search_cols=("Ticker", "Company", "Sector"),
+            sort_options={"Return": "Return", "Avg $ volume": "Avg $ vol",
+                          "Ticker": "Ticker", "Company": "Company"},
+            default_sort="Return",
+            csv_name=f"movers_{preset}.csv",
+            column_config={
+                "Return": st.column_config.NumberColumn("Return", format="%+.2f%%",
+                                                        help="Close-to-close over the window"),
+                "Avg $ vol": st.column_config.NumberColumn("Avg $ vol", format="compact"),
+                "Start": st.column_config.NumberColumn("Start", format="%.2f"),
+                "End": st.column_config.NumberColumn("End", format="%.2f"),
+            },
         )
-    vol_fig2.update_layout(hovermode="x unified")
-    vol_fig2 = base_layout(vol_fig2, "Ann. volatility")
-    vol_fig2.update_yaxes(tickformat=".0%")
-    st.plotly_chart(vol_fig2, use_container_width=True, config={"displayModeBar": False})
+
 
 # ---------------------------------------------------------------------------
-# Data & SQL: table view + transparency into the queries
+# Companies — search, overview, per-symbol charts, comparison
 # ---------------------------------------------------------------------------
-with tab_data:
-    st.subheader("Yearly summary — table view")
-    display_yearly = yearly.copy()
-    display_yearly["partial year"] = display_yearly["is_partial"].map({1: "yes", 0: ""})
-    display_yearly = display_yearly.drop(columns=["is_partial"])
-    display_yearly["year_return"] = display_yearly["year_return"].map(lambda v: f"{v*100:+.1f}%")
-    display_yearly["avg_volume"] = display_yearly["avg_volume"].map(lambda v: f"{v:,.0f}")
-    for col in ("open_close", "close_close", "year_high", "year_low"):
-        display_yearly[col] = display_yearly[col].map(lambda v: f"{v:,.1f}")
-    st.dataframe(display_yearly, use_container_width=True, hide_index=True)
+if section == "Companies":
+    # Autocomplete: one option per symbol, searchable by ticker OR company name
+    # because the label contains both and Streamlit's selectbox filters substrings.
+    label_by_key = {f"{r.symbol} — {r['name']}": r.symbol for _, r in equities.iterrows()}
+    keys = list(label_by_key)
+    default_key = next((k for k in keys if label_by_key[k] == "AAPL"), keys[0])
 
-    st.download_button(
-        "Download raw daily prices (CSV)",
-        data=pd.read_sql(queries.PRICES_IN_RANGE, conn, params={"start": min_date.isoformat(), "end": max_date.isoformat()}).to_csv(index=False),
-        file_name="sp500_daily.csv",
-        mime="text/csv",
+    pick = st.columns([2.6, 1.4])
+    with pick[0]:
+        chosen_label = st.selectbox(
+            "Search company or ticker", keys,
+            index=keys.index(st.session_state.get("co_symbol", default_key))
+            if st.session_state.get("co_symbol") in keys else keys.index(default_key),
+            key="co_symbol",
+            help="Type a ticker (AAPL) or a company name (Apple)",
+        )
+    sym = label_by_key[chosen_label]
+    meta = equities[equities["symbol"] == sym].iloc[0]
+
+    with pick[1]:
+        view_mode = st.radio("View", ["Line", "Candles"], horizontal=True,
+                             key="co_view", label_visibility="collapsed")
+
+    s_min, s_max = dal.date_bounds(sym)
+    c_start = max(start_d, s_min)
+    cs, ce = c_start.isoformat(), end_d.isoformat()
+
+    cq = dal.quote(sym)
+    cws = dal.window_stats(sym, cs, ce)
+    cpx = dal.prices(sym, cs, ce)
+
+    if cq is None or cws is None or cpx.empty:
+        st.warning(f"No data for {sym} in this window.")
+    else:
+        listed_note = ""
+        if s_min > start_d:
+            listed_note = f" · history starts {s_min:%b %Y}, after the selected window opens"
+        ui.quote_strip(
+            str(meta["name"]), sym, cq,
+            f"{meta['sector']} · {meta['industry']}{listed_note}", pal,
+        )
+
+        ui.kpi_cards([
+            {"icon": "📅", "label": f"Return · {preset}", "value": ui.fmt_pct(cws["period_return"], 1),
+             "change": f"{cws['trading_days']:,} sessions", "change_dir": "flat",
+             "foot": f"{pd.to_datetime(cws['first_date']):%b %Y} → {pd.to_datetime(cws['last_date']):%b %Y}"},
+            {"icon": "📈", "label": "CAGR", "value": ui.fmt_pct(cws["cagr"], 1),
+             "foot": "Annualized over the window"},
+            {"icon": "🏔", "label": "Highest close", "value": ui.fmt_price(cws["highest_close"]),
+             "foot": f"Lowest {ui.fmt_price(cws['lowest_close'])}"},
+            {"icon": "🔁", "label": "52-week high", "value": ui.fmt_price(cq["w52_high"]),
+             "foot": f"Low {ui.fmt_price(cq['w52_low'])} · trailing 1y"},
+            {"icon": "🔊", "label": "Avg volume", "value": ui.fmt_compact(cws["avg_volume"]),
+             "foot": f"{ui.fmt_dollar_compact(cws['avg_dollar_volume'])} avg turnover"},
+            {"icon": "〰", "label": "Volatility", "value": ui.fmt_pct(cws["ann_volatility"], 1, signed=False),
+             "change": ui.fmt_pct(cws["max_drawdown"], 0) + " max DD", "change_dir": "down",
+             "foot": "Annualized, from daily returns"},
+        ])
+        ui.note(
+            "Market cap is intentionally absent: it needs share-count data that no "
+            "reachable free endpoint provides, and a stale hardcoded figure would be "
+            "worse than none. Average dollar turnover is shown instead — it is computed "
+            "from data actually in the database."
+        )
+
+        ui.section("Price history", f"{sym} · {preset}")
+        if view_mode == "Candles":
+            st.plotly_chart(charts.candlestick(cpx, pal), use_container_width=True, config=PLOT_CONFIG)
+        else:
+            st.plotly_chart(
+                charts.price_line(cpx, pal, label=ui.fmt_price(cpx["close"].iloc[-1])),
+                use_container_width=True, config=PLOT_CONFIG,
+            )
+
+        ui.section("Moving averages", "Close with trailing 50- and 200-session means")
+        ma = dal.moving_averages(sym, cs, ce)
+        st.plotly_chart(charts.moving_average_chart(ma, pal), use_container_width=True, config=PLOT_CONFIG)
+        ui.note(
+            "A moving-average line only begins once its full window exists, so the "
+            "200-session average is absent for the first 200 sessions rather than "
+            "being averaged from fewer points than its label claims."
+        )
+
+        left, right = st.columns(2)
+        with left:
+            ui.section("Trading volume")
+            st.plotly_chart(charts.volume_bars(cpx, pal, height=240),
+                            use_container_width=True, config=PLOT_CONFIG)
+        with right:
+            ui.section("Daily returns")
+            dr = dal.daily_returns(sym, cs, ce)
+            st.plotly_chart(charts.returns_bars(dr, pal, height=240),
+                            use_container_width=True, config=PLOT_CONFIG)
+
+        l2, r2 = st.columns(2)
+        with l2:
+            ui.section("Cumulative return", "Compounded from daily returns")
+            cr = dal.cumulative_return(sym, cs, ce)
+            if not cr.empty:
+                st.plotly_chart(
+                    charts.area_series(cr, "cumulative_return", pal, color_key="blue",
+                                       y_title="Cumulative", height=280,
+                                       label=ui.fmt_pct(cr["cumulative_return"].iloc[-1], 0)),
+                    use_container_width=True, config=PLOT_CONFIG,
+                )
+        with r2:
+            ui.section("Rolling volatility", "21-session, annualized")
+            cv = dal.volatility(sym, cs, ce)
+            if not cv.empty:
+                st.plotly_chart(
+                    charts.area_series(cv, "ann_volatility_21d", pal, color_key="red",
+                                       y_title="Ann. volatility", height=280,
+                                       label=ui.fmt_pct(cv["ann_volatility_21d"].iloc[-1], 0, signed=False),
+                                       zero_line=False),
+                    use_container_width=True, config=PLOT_CONFIG,
+                )
+
+        # ---- comparison ----
+        ui.section("Comparison", "Rebased to 100 at the window start — one shared axis")
+        default_cmp = [s for s in (sym, "MSFT", INDEX_SYMBOL) if s in set(directory["symbol"])]
+        cmp_syms = st.multiselect(
+            "Compare symbols", options=list(directory["symbol"]),
+            default=st.session_state.get("cmp_syms", default_cmp[:3]),
+            key="cmp_syms", max_selections=8,
+            help="Up to 8. Each keeps its own color as the selection changes.",
+        )
+        if len(cmp_syms) < 2:
+            ui.note("Pick at least two symbols to compare.")
+        else:
+            pivot = dal.indexed_comparison(tuple(cmp_syms), START, END)
+            if pivot.empty:
+                ui.note("No overlapping data for that selection in this window.")
+            else:
+                # Default to log when the spread is wide enough that a linear axis
+                # would flatten the smaller series onto the baseline.
+                wide = charts.comparison_needs_log(pivot)
+                cscale = st.radio(
+                    "Comparison scale", ["Log", "Linear"] if wide else ["Linear", "Log"],
+                    horizontal=True, key="cmp_scale", label_visibility="collapsed",
+                )
+                st.plotly_chart(
+                    charts.indexed_comparison(pivot, pal, log=(cscale == "Log")),
+                    use_container_width=True, config=PLOT_CONFIG,
+                )
+                if wide and cscale == "Log":
+                    ui.note(
+                        "Log scale is on by default here because these series end more "
+                        "than 20x apart — on a linear axis the smaller ones would flatten "
+                        "onto the baseline. On a log axis equal ratios take equal vertical "
+                        "space, so each series stays readable. Still one shared axis."
+                    )
+                finals = pivot.ffill().iloc[-1].sort_values(ascending=False)
+                rows = pd.DataFrame({
+                    "Ticker": finals.index,
+                    "Indexed (start=100)": finals.values.round(1),
+                    "Window return": (finals.values - 100.0),  # already indexed to 100 = whole percents
+                    "First data": [pivot[c].first_valid_index().date() for c in finals.index],
+                })
+                st.dataframe(
+                    rows, use_container_width=True, hide_index=True,
+                    column_config={
+                        "Window return": st.column_config.NumberColumn("Window return", format="%+.2f%%"),
+                    },
+                )
+                ui.note(
+                    "Rebasing to 100 puts every symbol on one axis. A second y-axis is "
+                    "deliberately never used: two independent scales can be aligned to "
+                    "suggest any correlation you like. Where a symbol listed after the "
+                    "window opened, its series starts later — see 'First data'."
+                )
+
+
+# ---------------------------------------------------------------------------
+# Performance — leaderboards over each symbol's own history
+# ---------------------------------------------------------------------------
+if section == "Performance":
+    lb = dal.leaderboard()
+    ui.section("Long-run performance", "Each symbol over its own listed history")
+    ui.note(
+        "These are all-time figures per symbol, so the periods are NOT equal — a name "
+        "listed in 2012 has not had the same run as one listed in 2001. 'Years' and "
+        "'From' are shown so the comparison stays honest. Use the Market tab for "
+        "like-for-like returns inside a single window."
     )
 
-    st.subheader("SQL behind this dashboard")
-    st.caption("Every stat and series above is the direct output of one of these queries/views against data/sp500.db.")
-    for name, sql in [
-        ("yearly_summary (view)", queries.YEARLY_SUMMARY),
-        ("monthly_returns (view)", queries.MONTHLY_RETURNS),
-        ("drawdowns (view)", queries.DRAWDOWN_IN_RANGE),
-        ("rolling_volatility (view)", queries.VOLATILITY_IN_RANGE),
-        ("headline stats (CAGR, max drawdown, ann. vol)", queries.HEADLINE_STATS),
-    ]:
-        with st.expander(name):
-            st.code(sql, language="sql")
+    # As above: scale fractions to whole percents, because the "%%" format only
+    # appends a percent sign rather than multiplying.
+    disp = lb.assign(
+        Ticker=lb["symbol"], Company=lb["name"], Sector=lb["sector"],
+        From=pd.to_datetime(lb["first_date"]).dt.date,
+        Years=lb["years"].round(1),
+        Last=lb["last_close"].round(2),
+        Total=lb["total_return"] * 100, CAGR=lb["cagr"] * 100,
+        Vol=lb["ann_volatility"] * 100, MaxDD=lb["max_drawdown"] * 100,
+    )[["Ticker", "Company", "Sector", "From", "Years", "Last", "Total", "CAGR", "Vol", "MaxDD"]]
+
+    ui.data_table(
+        disp, key="perf",
+        search_cols=("Ticker", "Company", "Sector"),
+        sort_options={
+            "CAGR": "CAGR", "Total return": "Total", "Volatility": "Vol",
+            "Max drawdown": "MaxDD", "Years": "Years", "Ticker": "Ticker",
+        },
+        default_sort="CAGR",
+        csv_name="performance.csv",
+        height=460,
+        column_config={
+            "Total": st.column_config.NumberColumn("Total return", format="%+.1f%%"),
+            "CAGR": st.column_config.NumberColumn("CAGR", format="%+.2f%%"),
+            "Vol": st.column_config.NumberColumn("Volatility", format="%.2f%%"),
+            "MaxDD": st.column_config.NumberColumn("Max DD", format="%.1f%%"),
+            "Last": st.column_config.NumberColumn("Last", format="%.2f"),
+            "Years": st.column_config.NumberColumn("Years", format="%.1f"),
+        },
+    )
+
+    ui.section("Calendar-year returns", "S&P 500 index, per year")
+    y = dal.yearly(INDEX_SYMBOL).copy()
+    if not y.empty:
+        y["partial"] = y["is_partial"] == 1
+        y["tick"] = y.apply(lambda r: f"{r['year']}*" if r["partial"] else r["year"], axis=1)
+        y["label"] = ""
+        full = y[~y["partial"]]
+        if not full.empty:
+            for idx in (full["year_return"].idxmax(), full["year_return"].idxmin()):
+                y.loc[idx, "label"] = ui.fmt_pct(y.loc[idx, "year_return"], 1)
+        st.plotly_chart(charts.yearly_return_bars(y, pal), use_container_width=True, config=PLOT_CONFIG)
+        partials = y.loc[y["partial"], "year"].tolist()
+        if partials:
+            ui.note(
+                f"* {', '.join(partials)} are faded: the dataset covers only part of those "
+                "years, so they are period returns, not calendar-year returns."
+            )
+
+    ui.section("Monthly seasonality", "S&P 500 index · month by year")
+    m = dal.monthly(INDEX_SYMBOL)
+    if not m.empty:
+        piv = m.pivot(index="year", columns="month", values="month_return")
+        piv = piv.reindex(columns=[f"{i:02d}" for i in range(1, 13)])
+        st.plotly_chart(charts.seasonality_heatmap(piv, pal, MONTHS),
+                        use_container_width=True, config=PLOT_CONFIG)
+        with st.expander("Monthly returns — table view"):
+            st.dataframe(piv.style.format("{:+.2%}", na_rep="—"), use_container_width=True)
+
+
+# ---------------------------------------------------------------------------
+# Risk
+# ---------------------------------------------------------------------------
+if section == "Risk":
+    rsym = st.selectbox(
+        "Symbol", list(directory["symbol"]), key="risk_sym",
+        format_func=lambda s: f"{s} — {directory.loc[directory['symbol'] == s, 'name'].iloc[0]}",
+    )
+    r_min, _ = dal.date_bounds(rsym)
+    rs = max(start_d, r_min).isoformat()
+
+    dd = dal.drawdowns(rsym, rs, END)
+    vol = dal.volatility(rsym, rs, END)
+    rws = dal.window_stats(rsym, rs, END)
+
+    if dd.empty or rws is None:
+        st.warning("No data in the selected window.")
+    else:
+        worst = dd.loc[dd["drawdown"].idxmin()]
+        cur = dd["drawdown"].iloc[-1]
+        ui.kpi_cards([
+            {"icon": "📉", "label": "Max drawdown", "value": ui.fmt_pct(rws["max_drawdown"], 1),
+             "change": f"{pd.to_datetime(worst['date']):%b %Y}", "change_dir": "down",
+             "foot": "Deepest fall from a running high"},
+            {"icon": "📍", "label": "Current drawdown", "value": ui.fmt_pct(cur, 1),
+             "change_dir": "down" if cur < -0.001 else "flat",
+             "change": "below peak" if cur < -0.001 else "at peak",
+             "foot": "Distance below the running high"},
+            {"icon": "〰", "label": "Volatility (window)",
+             "value": ui.fmt_pct(rws["ann_volatility"], 1, signed=False),
+             "foot": "Annualized, from daily returns"},
+            {"icon": "⚡", "label": "Volatility (21d)",
+             "value": ui.fmt_pct(vol["ann_volatility_21d"].iloc[-1], 1, signed=False) if not vol.empty else "—",
+             "foot": "Most recent 21-session reading"},
+        ])
+
+        ui.section("Drawdown from running high", f"{rsym} · underwater curve")
+        fig = charts.area_series(dd, "drawdown", pal, color_key="red",
+                                 y_title="Drawdown", height=340, tickformat=".0%")
+        fig.add_annotation(
+            x=worst["date"], y=worst["drawdown"],
+            text=f"{worst['drawdown'] * 100:.1f}% · {pd.to_datetime(worst['date']):%b %Y}",
+            showarrow=True, arrowhead=0, arrowcolor=pal["muted"], ax=0, ay=-26,
+            font=dict(color=pal["text_primary"], size=11.5),
+        )
+        st.plotly_chart(fig, use_container_width=True, config=PLOT_CONFIG)
+
+        ui.section("Rolling volatility", "21-session, annualized")
+        if not vol.empty:
+            st.plotly_chart(
+                charts.area_series(vol, "ann_volatility_21d", pal, color_key="blue",
+                                   y_title="Ann. volatility", height=300,
+                                   label=ui.fmt_pct(vol["ann_volatility_21d"].iloc[-1], 0, signed=False),
+                                   zero_line=False),
+                use_container_width=True, config=PLOT_CONFIG,
+            )
+
+        ui.section("Risk vs return", "All symbols over their own full history")
+        lb = dal.leaderboard()
+        scat = lb.dropna(subset=["ann_volatility", "cagr"])
+        if not scat.empty:
+            import plotly.graph_objects as go
+            f = go.Figure()
+            f.add_trace(go.Scatter(
+                x=scat["ann_volatility"], y=scat["cagr"], mode="markers+text",
+                text=scat["symbol"], textposition="top center",
+                textfont=dict(color=pal["text_secondary"], size=9),
+                marker=dict(size=10, color=pal["series"][0],
+                            line=dict(width=2, color=pal["surface"])),
+                customdata=scat[["name"]].values,
+                hovertemplate="<b>%{text}</b><br>Vol %{x:.1%} · CAGR %{y:.1%}<extra></extra>",
+            ))
+            f = charts.style(f, pal, y_title="CAGR", height=440, crosshair=False,
+                             y_tickformat=".0%")
+            f.update_xaxes(title=dict(text="Annualized volatility",
+                                      font=dict(color=pal["muted"], size=11.5)),
+                           tickformat=".0%", showgrid=True, gridcolor=pal["gridline"])
+            st.plotly_chart(f, use_container_width=True, config=PLOT_CONFIG)
+            ui.note(
+                "One point per symbol, over each symbol's own listed history — so the "
+                "horizon differs between points. Labels are drawn for every point here "
+                "because there are only ~49 and they are the identity channel."
+            )
+
+
+# ---------------------------------------------------------------------------
+# SQL Explorer
+# ---------------------------------------------------------------------------
+if section == "SQL Explorer":
+    ui.section("SQL Explorer", "Every query behind this dashboard, run live")
+    ui.note(
+        "Pick a query to see the exact SQL, what it does and why, the rows it returns, "
+        "and how long it took. Timings are measured on an uncached run, so they reflect "
+        "real query cost rather than a cache hit."
+    )
+    st.write("")
+
+    names = list(queries.EXPLORER)
+    choice = st.selectbox("Query", names, key="sql_pick")
+    spec = queries.EXPLORER[choice]
+
+    needed = spec["params"]
+    params: dict[str, str] = {}
+    if needed:
+        cols = st.columns(len(needed))
+        for c, p in zip(cols, needed):
+            with c:
+                if p == "symbol":
+                    params[p] = st.selectbox("symbol", list(directory["symbol"]), key="sql_sym")
+                elif p == "start":
+                    params[p] = st.text_input("start", START, key="sql_start")
+                elif p == "end":
+                    params[p] = st.text_input("end", END, key="sql_end")
+
+    try:
+        df, ms = dal.timed_read(str(spec["sql"]), params)
+        err = None
+    except Exception as exc:
+        df, ms, err = pd.DataFrame(), 0.0, str(exc)
+
+    ui.kpi_cards([
+        {"icon": "⏱", "label": "Execution time", "value": f"{ms:,.1f} ms",
+         "foot": "Uncached, measured just now"},
+        {"icon": "🧾", "label": "Rows returned", "value": f"{len(df):,}",
+         "foot": f"{len(df.columns)} columns"},
+        {"icon": "🗄", "label": "Engine", "value": "SQLite", "small": True,
+         "foot": "Views + materialized rollups"},
+    ])
+
+    st.markdown(f'<div class="note" style="margin:10px 0 2px;">{ui.esc(str(spec["explain"]))}</div>',
+                unsafe_allow_html=True)
+    st.code(str(spec["sql"]).strip(), language="sql")
+
+    if err:
+        st.error(f"Query failed: {err}")
+    elif df.empty:
+        st.info("Query returned no rows for those parameters.")
+    else:
+        st.markdown('<div class="note">Returned dataset (first 200 rows)</div>', unsafe_allow_html=True)
+        st.dataframe(df.head(200), use_container_width=True, hide_index=True, height=360)
+        st.download_button("⬇ Export result CSV", data=df.to_csv(index=False),
+                           file_name="query_result.csv", mime="text/csv")
+
+    with st.expander("Schema — tables, views and materialized rollups"):
+        schema = dal.timed_read(
+            "SELECT type, name FROM sqlite_master "
+            "WHERE name NOT LIKE 'sqlite_%' AND name NOT LIKE 'idx_%' "
+            "ORDER BY CASE type WHEN 'table' THEN 0 ELSE 1 END, name;"
+        )[0]
+        st.dataframe(schema, use_container_width=True, hide_index=True)
+
+
+# ---------------------------------------------------------------------------
+# About
+# ---------------------------------------------------------------------------
+if section == "About":
+    ui.section("About this project", "How it is built, and what the numbers do and don't mean")
+    st.markdown(
+        """
+**Architecture.** A SQL-first pipeline in four steps:
+
+1. `fetch_data.py` pulls ~25 years of daily OHLCV per symbol from Yahoo Finance's
+   chart API into `data/prices.csv`. It caches each symbol as it arrives, so a
+   rate-limited run resumes instead of starting over.
+2. `build_db.py` loads the CSVs into SQLite and defines the analysis as **views**
+   — daily returns, running-peak drawdowns, moving averages, rolling volatility,
+   calendar-year and monthly rollups — all partitioned by symbol.
+3. The two most expensive rollups are **materialized** into tables at build time.
+   The leaderboard went from ~2,100 ms as a live view to ~1 ms as a table; the
+   quote snapshot from ~286 ms to under 1 ms.
+4. `app.py` queries and draws. It performs no analysis of its own — every number
+   on screen comes back from SQL. The **SQL Explorer** tab proves it.
+
+**Why no dual-axis charts.** Comparing symbols at different price levels uses
+rebasing to 100 on a single shared axis. Two independent y-scales can be aligned
+to imply any correlation you want, which is the most common way a finance chart
+misleads.
+
+**Honest limits** — the things this data genuinely cannot support:
+
+- **Price returns, not total returns.** Dividends are excluded, so long-run
+  figures understate what a shareholder actually earned.
+- **No market cap.** It requires share counts, which no reachable free endpoint
+  provides. Rather than hardcode a figure that goes stale, the app shows average
+  dollar turnover, computed from data actually in the database.
+- **Unequal histories.** Symbols listed later (META 2012, TSLA 2010) have shorter
+  records. All-time leaderboards therefore show `Years` and `From` rather than
+  silently ranking unequal periods against each other.
+- **Sectors are equal-weighted**, not market-cap-weighted, for the same reason.
+- **Survivorship bias.** The universe is a fixed list of companies that exist
+  today, so it omits firms that failed or were acquired — which flatters
+  long-run returns.
+- **Market status is schedule-based.** Weekday 09:30–16:00 ET; exchange holidays
+  are not modelled.
+- **Partial calendar years** at each end of the window are flagged and faded,
+  because a part-year figure is not a calendar-year return.
+
+**Accessibility.** Series colors come from a palette validated per theme for
+colorblind separation (Machado 2009 protan/deutan simulation) and WCAG contrast
+against each mode's surface. Identity never rests on color alone: legends and
+direct labels accompany every multi-series chart, and each chart has a table
+view or CSV export.
+"""
+    )
+    ui.section("Data source")
+    ui.note(
+        "Yahoo Finance chart API (unauthenticated). Prices are daily closes. "
+        "This project is for analysis and portfolio demonstration — it is not "
+        "investment advice."
+    )

@@ -1,6 +1,12 @@
 .venv/
 __pycache__/
 
-# The SQLite DB is a build artifact — app.py rebuilds it from the CSV on first
-# run. The CSV itself IS committed, so a fresh deploy has its source data.
+# Build artifacts. app.py rebuilds the database from the committed
+# data/prices.csv.gz + data/symbols.csv on first run, so a fresh deploy needs
+# neither of these in version control.
 data/sp500.db
+data/prices.csv
+
+# Per-symbol fetch cache: 33MB that only exists to make a rate-limited
+# fetch_data.py run resumable. Regenerated on demand.
+data/cache/

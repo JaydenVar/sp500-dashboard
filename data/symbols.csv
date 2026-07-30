@@ -1,0 +1,51 @@
+symbol,name,sector,industry,is_index
+^GSPC,S&P 500 Index,Index,Broad Market Index,1
+AAPL,Apple Inc.,Information Technology,Consumer Electronics,0
+MSFT,Microsoft Corporation,Information Technology,Software,0
+NVDA,NVIDIA Corporation,Information Technology,Semiconductors,0
+AVGO,Broadcom Inc.,Information Technology,Semiconductors,0
+ORCL,Oracle Corporation,Information Technology,Software,0
+CRM,"Salesforce, Inc.",Information Technology,Software,0
+AMD,"Advanced Micro Devices, Inc.",Information Technology,Semiconductors,0
+ADBE,Adobe Inc.,Information Technology,Software,0
+CSCO,"Cisco Systems, Inc.",Information Technology,Communications Equipment,0
+INTC,Intel Corporation,Information Technology,Semiconductors,0
+QCOM,QUALCOMM Incorporated,Information Technology,Semiconductors,0
+TXN,Texas Instruments Incorporated,Information Technology,Semiconductors,0
+IBM,International Business Machines,Information Technology,IT Services,0
+GOOGL,Alphabet Inc.,Communication Services,Interactive Media,0
+META,"Meta Platforms, Inc.",Communication Services,Interactive Media,0
+NFLX,"Netflix, Inc.",Communication Services,Entertainment,0
+DIS,The Walt Disney Company,Communication Services,Entertainment,0
+T,AT&T Inc.,Communication Services,Telecom,0
+VZ,Verizon Communications Inc.,Communication Services,Telecom,0
+AMZN,"Amazon.com, Inc.",Consumer Discretionary,Broadline Retail,0
+TSLA,"Tesla, Inc.",Consumer Discretionary,Automobiles,0
+HD,"The Home Depot, Inc.",Consumer Discretionary,Specialty Retail,0
+MCD,McDonald's Corporation,Consumer Discretionary,Restaurants,0
+NKE,"NIKE, Inc.",Consumer Discretionary,Apparel,0
+SBUX,Starbucks Corporation,Consumer Discretionary,Restaurants,0
+JPM,JPMorgan Chase & Co.,Financials,Diversified Banks,0
+V,Visa Inc.,Financials,Transaction Processing,0
+MA,Mastercard Incorporated,Financials,Transaction Processing,0
+BAC,Bank of America Corporation,Financials,Diversified Banks,0
+WFC,Wells Fargo & Company,Financials,Diversified Banks,0
+GS,"The Goldman Sachs Group, Inc.",Financials,Investment Banking,0
+BRK-B,Berkshire Hathaway Inc.,Financials,Multi-Sector Holdings,0
+UNH,UnitedHealth Group Incorporated,Health Care,Managed Care,0
+JNJ,Johnson & Johnson,Health Care,Pharmaceuticals,0
+LLY,Eli Lilly and Company,Health Care,Pharmaceuticals,0
+PFE,Pfizer Inc.,Health Care,Pharmaceuticals,0
+ABBV,AbbVie Inc.,Health Care,Biotechnology,0
+MRK,"Merck & Co., Inc.",Health Care,Pharmaceuticals,0
+WMT,Walmart Inc.,Consumer Staples,Consumer Staples Retail,0
+COST,Costco Wholesale Corporation,Consumer Staples,Consumer Staples Retail,0
+PG,The Procter & Gamble Company,Consumer Staples,Household Products,0
+KO,The Coca-Cola Company,Consumer Staples,Beverages,0
+PEP,"PepsiCo, Inc.",Consumer Staples,Beverages,0
+XOM,Exxon Mobil Corporation,Energy,Integrated Oil & Gas,0
+CVX,Chevron Corporation,Energy,Integrated Oil & Gas,0
+CAT,Caterpillar Inc.,Industrials,Machinery,0
+BA,The Boeing Company,Industrials,Aerospace & Defense,0
+GE,GE Aerospace,Industrials,Aerospace & Defense,0
+UPS,"United Parcel Service, Inc.",Industrials,Air Freight & Logistics,0

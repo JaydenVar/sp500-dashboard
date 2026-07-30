@@ -1,82 +1,145 @@
-# S&P 500 — 25-Year Dashboard
+# Market Analytics — a SQL-first equity dashboard
 
-A SQL-first dashboard over ~25 years of daily S&P 500 (`^GSPC`) history.
-
-All statistics are computed **in SQL** against a local SQLite database. Python
-runs the queries and draws the results; it does no analysis of its own.
+25 years of daily history for the S&P 500 index and 49 large-cap US equities.
+**Every figure on screen is the output of a SQL query** — the analysis lives in
+SQLite views and materialized rollups, and Python only queries and draws. The
+built-in **SQL Explorer** page proves it: pick any query and see the SQL, an
+explanation of what it does, the rows it returns, and its measured runtime.
 
 ## Setup
 
 ```bash
 python3 -m venv .venv
-./.venv/bin/pip install streamlit plotly pandas
+./.venv/bin/pip install -r requirements.txt
 ```
 
 ## Run
 
 ```bash
-./.venv/bin/python fetch_data.py    # download daily history -> data/sp500_daily.csv
-./.venv/bin/python build_db.py      # load CSV + create SQL views -> data/sp500.db
-./.venv/bin/streamlit run app.py    # open the dashboard
+./.venv/bin/streamlit run app.py
 ```
 
-`fetch_data.py` and `build_db.py` only need re-running to refresh the data.
+That's it — on first launch the app builds its own database from the committed
+CSVs. To refresh the market data:
 
-## Files
+```bash
+./.venv/bin/python fetch_data.py    # download daily history (resumable)
+./.venv/bin/python build_db.py      # rebuild the SQLite database
+```
 
-| File | Role |
+## Sections
+
+| Section | What's in it |
 |---|---|
-| `fetch_data.py` | Pulls ~25y of daily OHLCV from Yahoo Finance into `data/sp500_daily.csv` |
-| `build_db.py` | Loads the CSV into SQLite and defines every analysis view in SQL |
-| `queries.py` | The SQL the dashboard runs — one place to read all the analysis |
-| `db.py` | Connection helper; registers `SQRT`/`POWER` (stock SQLite lacks them) |
-| `theme.py` | Light/dark palette values and page CSS |
-| `app.py` | Streamlit UI — runs the queries, draws the charts |
+| **Overview** | S&P 500 quote strip, KPI row, index level (linear/log), volume |
+| **Market** | Breadth (advancing/declining), sector performance, full movers table |
+| **Companies** | Ticker/name search, company overview, price + MAs + volume + returns + cumulative return + rolling volatility, and multi-symbol comparison |
+| **Performance** | Long-run leaderboard, calendar-year returns, monthly seasonality |
+| **Risk** | Drawdown curve, rolling volatility, risk-vs-return scatter |
+| **SQL Explorer** | Every query, explained, with live timings and the schema |
+| **About** | Architecture and an honest account of the data's limits |
 
-## The SQL layer
+Controls sit in one row above everything they scope: date presets
+(1M / 3M / 6M / YTD / 1Y / 3Y / 5Y / 10Y / MAX), a light/dark toggle, and Reset view.
 
-`build_db.py` creates one table and five views. The views are where the analysis
-lives:
+## Architecture
 
-| View | What it computes |
-|---|---|
-| `prices` | base table — one row per trading day |
-| `daily_returns` | day-over-day return via `LAG(close) OVER (ORDER BY date)` |
-| `running_peak` | running all-time high via `MAX(close) OVER (…UNBOUNDED PRECEDING…)` |
-| `drawdowns` | `(close − peak) / peak` — how far below the all-time high |
-| `yearly_summary` | per-year open/close/high/low, avg volume, return, partial-year flag |
-| `monthly_returns` | per-month return, used for the seasonality heatmap |
-| `rolling_volatility` | annualized volatility over a 21-session rolling window |
+```
+fetch_data.py   Yahoo Finance chart API  ->  data/prices.csv + data/symbols.csv
+build_db.py     CSVs  ->  SQLite: tables, views, materialized rollups
+queries.py      every SQL statement, each paired with an explanation
+data_access.py  cached query layer (st.cache_data) — the only place SQL is run
+charts.py       Plotly builders + one shared styling function
+components.py   header, KPI cards, quote strip, sortable/paginated table
+theme.py        validated palettes and the whole stylesheet
+app.py          layout and interaction only — no analysis
+```
 
-Headline figures (CAGR, max drawdown, full-period volatility) come from
-`queries.HEADLINE_STATS`, a single query. The **Data & SQL** tab in the app shows
-every query verbatim next to the numbers it produced.
+### The SQL layer
 
-## Dashboard
+| Object | Kind | What it computes |
+|---|---|---|
+| `prices` | table | one row per symbol per session |
+| `symbols` | table | name, sector, industry |
+| `daily_returns` | view | `LAG(close) OVER (PARTITION BY symbol …)` |
+| `drawdowns` | view | running peak via `MAX(…) OVER (… UNBOUNDED PRECEDING)`, and distance below it |
+| `moving_averages` | view | trailing 50/200-session means, NULL until the frame is full |
+| `rolling_volatility` | view | 21-session annualized σ from `E[r²] − E[r]²` |
+| `yearly_summary` | view | per-year OHLC, return, partial-year flag |
+| `monthly_returns` | view | per-month return (seasonality grid) |
+| `symbol_stats` | **materialized** | one row per symbol: CAGR, volatility, max drawdown, liquidity |
+| `latest_quote` | **materialized** | newest session, prior close, trailing 52-week range |
 
-A filter row (date-range presets, light/dark) scopes everything below it, then a
-KPI row and four tabs:
+### Performance
 
-- **Overview** — index level (linear/log) and daily volume
-- **Returns** — calendar-year return bars and a month-by-year seasonality heatmap
-- **Risk** — drawdown-from-peak and rolling volatility
-- **Data & SQL** — yearly table, CSV export, and the SQL behind every figure
+Two rollups are materialized at build time rather than computed per request,
+because both aggregate window functions over all ~300k rows:
 
-## Notes on the data
+| Query | As a live view | Materialized |
+|---|---|---|
+| Leaderboard | ~2,100 ms | **~1 ms** |
+| Quote snapshot | ~286 ms | **~0.4 ms** |
 
-- Source is Yahoo Finance's chart API (no API key). It returns index price data;
-  returns here are **price returns, not total returns** — dividends are excluded.
-- The window is the last ~25 years, so the **first and last calendar years are
-  partial**. Their bars are faded and marked `*`, and the yearly table flags them,
-  because a part-year figure is not a calendar-year return.
-- KPI labels state their own scope: `25Y CAGR` and `Max drawdown (25Y)` are
-  full-period and do not change with the date filter; `Current close`,
-  `Current drawdown` and `Ann. volatility (21d)` are as-of the latest session.
+On top of that, every read is memoized with `st.cache_data`, and the app renders
+only the active section — so switching sections doesn't re-run the other six
+sections' queries.
 
-## Visual design
+`SQRT`, `POWER`, `LN`, `EXP` and a custom `MEDIAN` aggregate are registered in
+`db.py`, since Python's bundled SQLite ships without the math functions.
 
-Colors come from a validated palette (blue/red — the documented diverging pair)
-and were checked against the six data-viz color rules in both light and dark mode:
-OKLCH lightness band, chroma floor, colorblind separation (Machado 2009 protan/
-deutan simulation), normal-vision separation floor, and WCAG contrast against each
-mode's surface. All pass — worst-case colorblind ΔE 19.2 against a floor of 8.
+## Design decisions worth knowing
+
+**No dual-axis charts, ever.** Comparing symbols at different price levels
+rebases every series to 100 on one shared axis. Two independent y-scales can be
+aligned to imply any correlation you like — it's the most common way a finance
+chart misleads. When series end more than 20x apart the axis switches to log, so
+equal ratios get equal vertical space instead of the smaller series flattening
+onto the baseline.
+
+**Median, not mean, for sector performance.** Over long windows a mean of total
+returns is dominated by one outlier: a single +85,000% name drags a sector
+"average" into five figures, describing that stock rather than the sector.
+
+**Colors are validated, not chosen by eye.** Series colors pass, per theme, an
+OKLCH lightness band, a chroma floor, colorblind separation (Machado 2009
+protan/deutan at full severity), a normal-vision separation floor, and WCAG
+contrast against that theme's surface. Identity never rests on color alone —
+multi-series charts carry a legend, direction chips pair an arrow with the color,
+and every chart has a table view or CSV export.
+
+## Honest limits
+
+Things this data genuinely cannot support, stated rather than papered over:
+
+- **Price returns, not total returns.** Dividends are excluded, so long-run
+  figures understate what a shareholder actually earned.
+- **No market cap.** It needs share counts, and every free endpoint that serves
+  them is auth-gated (401/404). Rather than hardcode a figure that goes stale,
+  the app shows average dollar turnover, computed from data actually present.
+- **Unequal histories.** Symbols listed later (META 2012, TSLA 2010) have shorter
+  records, so all-time leaderboards show `Years` and `From` instead of silently
+  ranking unequal periods. Use the Market tab for like-for-like window returns.
+- **Sectors are equal-weighted**, not market-cap-weighted, for the same reason.
+- **Survivorship bias.** The universe is a fixed list of companies that exist
+  today, omitting firms that failed or were acquired — which flatters long-run
+  returns.
+- **Market status is schedule-based** (weekday 09:30–16:00 ET); exchange
+  holidays are not modelled, and the label says so.
+- **Partial calendar years** at each end of the window are flagged and faded.
+
+## Notes on fetching
+
+Yahoo's chart API rate-limits bursts with HTTP 429. Two things matter:
+
+- `fetch_data.py` caches each symbol under `data/cache/` the moment it arrives,
+  so a throttled run loses no completed work — re-run and it fetches only what's
+  missing.
+- The request sends a bare `User-Agent: Mozilla/5.0`. Measured: a *full* Chrome
+  UA plus a `Referer` gets 429'd, apparently routing into a stricter path that
+  expects a real browser session. Don't "improve" it into a realistic browser
+  string.
+
+## Data source
+
+Yahoo Finance chart API (unauthenticated), daily closes. This project is for
+analysis and portfolio demonstration — it is not investment advice.
