@@ -359,3 +359,95 @@ def comparison_frames(symbols: tuple[str, ...], start: str, end: str, metric: st
         if df is not None and not df.empty:
             out[sym] = df[["date", col]]
     return out
+
+
+# ---------------------------------------------------------------------------
+# Stock Journey
+# ---------------------------------------------------------------------------
+# All all-time by construction, like the Performance readers: a journey is the
+# company's whole record. `asof` moves a cursor INSIDE that record rather than
+# narrowing it, so it is a cache key like any other parameter -- and because the
+# cursor lands on a small number of distinct dates during playback, the cache
+# hit rate through a replay is high.
+
+@st.cache_data(ttl=TTL, show_spinner=False)
+def journey_snapshot(symbol: str, asof: str) -> pd.Series | None:
+    df = _read(queries.JOURNEY_SNAPSHOT, {"symbol": symbol, "asof": asof})
+    return None if df.empty else df.iloc[0]
+
+
+@st.cache_data(ttl=TTL, show_spinner=False)
+def journey_price_path(symbol: str, stride: int) -> pd.DataFrame:
+    """The drawable price line. `stride` thins it; peaks are always kept."""
+    return _dated(_read(queries.JOURNEY_PRICE_PATH,
+                        {"symbol": symbol, "stride": max(int(stride), 1)}))
+
+
+@st.cache_data(ttl=TTL, show_spinner=False)
+def journey_drawdowns(symbol: str, asof: str, min_depth: float = -0.20) -> pd.DataFrame:
+    """Drawdown episodes deeper than `min_depth` (a negative fraction).
+
+    `asof` bounds the price series the episodes are built from, so an episode
+    still open at the cursor returns a NULL recovery instead of one dated in the
+    cursor's future. Filtering the returned frame instead would leak it.
+    """
+    return _read(queries.JOURNEY_DRAWDOWN_EPISODES,
+                 {"symbol": symbol, "asof": asof, "min_depth": float(min_depth)})
+
+
+@st.cache_data(ttl=TTL, show_spinner=False)
+def journey_extremes(symbol: str, asof: str, limit: int = 5) -> pd.DataFrame:
+    return _read(queries.JOURNEY_EXTREME_DAYS,
+                 {"symbol": symbol, "asof": asof, "limit": int(limit)})
+
+
+@st.cache_data(ttl=TTL, show_spinner=False)
+def journey_streaks(symbol: str, asof: str, direction: int, limit: int = 3) -> pd.DataFrame:
+    """Longest runs in one direction: 1 for up sessions, -1 for down."""
+    if direction not in (1, -1):
+        raise ValueError(f"direction must be 1 or -1, got {direction!r}")
+    return _read(queries.JOURNEY_STREAKS,
+                 {"symbol": symbol, "asof": asof,
+                  "direction": int(direction), "limit": int(limit)})
+
+
+@st.cache_data(ttl=TTL, show_spinner=False)
+def journey_best_worst(symbol: str, asof: str) -> pd.DataFrame:
+    """Best/worst full calendar month and year up to the cursor.
+
+    The month and year keys are derived from `asof` here rather than in SQL
+    because SQLite's date functions would need the same substring anyway, and
+    the query reads more clearly taking them as parameters.
+    """
+    return _read(queries.JOURNEY_BEST_WORST_PERIODS,
+                 {"symbol": symbol, "asof_month": asof[:7], "asof_year": asof[:4]})
+
+
+@st.cache_data(ttl=TTL, show_spinner=False)
+def journey_trend_changes(symbol: str, asof: str) -> pd.DataFrame:
+    return _dated(_read(queries.JOURNEY_TREND_CHANGES, {"symbol": symbol, "asof": asof}))
+
+
+@st.cache_data(ttl=TTL, show_spinner=False)
+def journey_records(symbol: str, asof: str) -> pd.Series | None:
+    df = _read(queries.JOURNEY_RECORD_SUMMARY, {"symbol": symbol, "asof": asof})
+    return None if df.empty or not df.iloc[0]["record_days"] else df.iloc[0]
+
+
+@st.cache_data(ttl=TTL, show_spinner=False)
+def journey_company_events(symbol: str, asof: str, sessions: int = 5) -> pd.DataFrame:
+    return _read(queries.JOURNEY_COMPANY_EVENTS,
+                 {"symbol": symbol, "asof": asof, "sessions": int(sessions)})
+
+
+@st.cache_data(ttl=TTL, show_spinner=False)
+def journey_market_events(symbol: str, asof: str, sessions: int = 5,
+                          min_move: float = 0.05) -> pd.DataFrame:
+    """Market-wide events, kept only where this company itself moved.
+
+    `min_move` is an absolute fraction and is applied in the query's WHERE
+    clause, so what counts as "materially affected" is visible in the SQL.
+    """
+    return _read(queries.JOURNEY_MARKET_EVENT_IMPACT,
+                 {"symbol": symbol, "asof": asof,
+                  "sessions": int(sessions), "min_move": abs(float(min_move))})

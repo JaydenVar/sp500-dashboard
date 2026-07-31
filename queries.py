@@ -1000,3 +1000,555 @@ EXPLORER.update({
         ),
     },
 })
+
+
+# ==========================================================================
+# Stock Journey — a company's history as a sequence of events
+# ==========================================================================
+# The Journey section replays one company's record forward in time. Every fact
+# it narrates is one of these queries; `journey.py` selects and phrases them and
+# computes nothing, so a figure on the Journey page is the same kind of object
+# as a figure anywhere else in the app.
+#
+# All of these are ALL-TIME by construction, like Performance: a journey is the
+# company's whole record, and the shared date window is a comparison frame for
+# cross-section reading rather than a filter on a narrative. What moves is the
+# `:asof` cursor, which selects a POINT inside that record, not a sub-window.
+
+# Where the company stood on a given date -- the query behind the playhead.
+#
+# `:asof` is matched with `date <= :asof` rather than equality: the cursor is a
+# calendar date and most calendar dates are not trading sessions, so an equality
+# match would blank the whole panel on every weekend and holiday.
+JOURNEY_SNAPSHOT = """
+WITH s AS (
+    SELECT date, close,
+           MAX(close) OVER (ORDER BY date ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
+               AS peak_close,
+           ROW_NUMBER() OVER (ORDER BY date) AS rn
+    FROM prices
+    WHERE symbol = :symbol AND close IS NOT NULL AND close > 0
+),
+asof AS (
+    SELECT * FROM s WHERE date <= :asof ORDER BY date DESC LIMIT 1
+),
+first AS (
+    SELECT date AS first_date, close AS first_close FROM s ORDER BY date LIMIT 1
+)
+SELECT
+    a.date,
+    a.close,
+    a.peak_close,
+    a.rn AS sessions_elapsed,
+    f.first_date,
+    f.first_close,
+    a.close / f.first_close - 1 AS return_to_date,
+    (a.close - a.peak_close) / a.peak_close AS drawdown,
+    -- A record high is a close at (not merely near) the running maximum, which
+    -- includes the current row -- so the day it sets the record reads as 1.
+    CASE WHEN a.close >= a.peak_close THEN 1 ELSE 0 END AS at_record_high,
+    (julianday(a.date) - julianday(f.first_date)) / 365.25 AS years_elapsed,
+    POWER(a.close / f.first_close,
+          1.0 / MAX((julianday(a.date) - julianday(f.first_date)) / 365.25, 0.01)) - 1
+        AS cagr_to_date
+FROM asof a CROSS JOIN first f;
+"""
+
+# Every drawdown episode: peak, trough, and whether it ever recovered.
+#
+# Gaps-and-islands over the running maximum. A session that closes at the
+# running peak opens a new episode, so a cumulative SUM of that flag labels each
+# episode; the peak day is its first row and the recovery day is the first row
+# of the NEXT episode. An episode with no next one is still underwater today,
+# which is why `recovery_date` is nullable and must stay that way -- coalescing
+# it to the last date would report an ongoing drawdown as recovered.
+#
+# `:asof` bounds the SOURCE rows, not the output. That distinction is the whole
+# point: filtering the finished episodes instead would let a cursor sitting in
+# 2003 report that the crash it is living through recovered in 2012. Cutting the
+# series first means an episode still open at the cursor comes back with a NULL
+# recovery -- which is what was actually known at that moment.
+JOURNEY_DRAWDOWN_EPISODES = """
+WITH s AS (
+    SELECT date, close,
+           MAX(close) OVER (ORDER BY date ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
+               AS peak_close
+    FROM prices
+    WHERE symbol = :symbol AND close IS NOT NULL AND close > 0 AND date <= :asof
+),
+flagged AS (
+    SELECT date, close, peak_close,
+           CASE WHEN close >= peak_close THEN 1 ELSE 0 END AS is_peak
+    FROM s
+),
+grouped AS (
+    SELECT date, close, peak_close,
+           SUM(is_peak) OVER (ORDER BY date ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
+               AS episode
+    FROM flagged
+),
+episodes AS (
+    SELECT
+        episode,
+        MIN(date)  AS peak_date,
+        MAX(date)  AS last_date,
+        MAX(peak_close) AS peak_close,
+        MIN(close) AS trough_close,
+        COUNT(*)   AS sessions
+    FROM grouped
+    GROUP BY episode
+),
+troughs AS (
+    -- The trough's DATE, which a MIN() over close cannot give.
+    SELECT g.episode, MIN(g.date) AS trough_date
+    FROM grouped g
+    JOIN episodes e ON e.episode = g.episode AND g.close = e.trough_close
+    GROUP BY g.episode
+)
+SELECT
+    e.peak_date,
+    t.trough_date,
+    LEAD(e.peak_date) OVER (ORDER BY e.episode) AS recovery_date,
+    e.peak_close,
+    e.trough_close,
+    e.trough_close / e.peak_close - 1 AS depth,
+    e.sessions,
+    julianday(t.trough_date) - julianday(e.peak_date) AS days_to_trough,
+    julianday(LEAD(e.peak_date) OVER (ORDER BY e.episode)) - julianday(t.trough_date)
+        AS days_to_recover
+FROM episodes e
+JOIN troughs t ON t.episode = e.episode
+WHERE e.trough_close / e.peak_close - 1 <= :min_depth
+ORDER BY e.peak_date;
+"""
+
+# Largest single-session moves, both directions in one result.
+#
+# UNION ALL of two ordered halves rather than one query sorted by ABS(): the
+# extremes are asymmetric (the worst day is usually larger than the best) and a
+# single ABS ranking would return five losses and no gains for most companies.
+JOURNEY_EXTREME_DAYS = """
+WITH r AS (
+    SELECT date, close, daily_return
+    FROM daily_returns
+    WHERE symbol = :symbol AND daily_return IS NOT NULL AND date <= :asof
+)
+SELECT * FROM (
+    SELECT 'gain' AS direction, date, close, daily_return
+    FROM r ORDER BY daily_return DESC LIMIT :limit
+)
+UNION ALL
+SELECT * FROM (
+    SELECT 'loss' AS direction, date, close, daily_return
+    FROM r ORDER BY daily_return ASC LIMIT :limit
+)
+ORDER BY daily_return DESC;
+"""
+
+# Longest unbroken runs of up or down sessions.
+#
+# Classic gaps-and-islands: the difference between a global row number and a
+# per-direction row number is constant within a run, so it labels the run.
+# Flat sessions (a return of exactly zero) end a run rather than extending
+# either one -- a flat day is not an up day, and treating it as one would
+# silently merge two separate streaks into a longer fictitious one.
+#
+# The run's return comes from the CLOSES at its boundaries, not from compounding
+# the daily returns: a product of daily returns has to be reconstructed with
+# EXP(SUM(LN(...))) and accumulates float error over a long run, while the two
+# closes give the same figure exactly.
+JOURNEY_STREAKS = """
+WITH r AS (
+    SELECT date, close, daily_return,
+           CASE WHEN daily_return > 0 THEN 1
+                WHEN daily_return < 0 THEN -1
+                ELSE 0 END AS direction
+    FROM daily_returns
+    WHERE symbol = :symbol AND daily_return IS NOT NULL AND date <= :asof
+),
+marked AS (
+    SELECT *,
+           ROW_NUMBER() OVER (ORDER BY date)
+         - ROW_NUMBER() OVER (PARTITION BY direction ORDER BY date) AS run_id
+    FROM r
+    WHERE direction <> 0
+),
+runs AS (
+    SELECT direction, run_id,
+           COUNT(*)  AS length,
+           MIN(date) AS start_date,
+           MAX(date) AS end_date
+    FROM marked
+    GROUP BY direction, run_id
+),
+priced AS (
+    SELECT
+        runs.direction, runs.length, runs.start_date, runs.end_date,
+        (SELECT close FROM prices
+          WHERE symbol = :symbol AND date < runs.start_date
+          ORDER BY date DESC LIMIT 1) AS close_before,
+        (SELECT close FROM prices
+          WHERE symbol = :symbol AND date = runs.end_date) AS close_after
+    FROM runs
+)
+SELECT direction, length, start_date, end_date,
+       close_after / close_before - 1 AS run_return
+FROM priced
+WHERE direction = :direction
+ORDER BY length DESC, start_date ASC
+LIMIT :limit;
+"""
+
+# Best and worst calendar months and years, as one labelled list.
+#
+# Partial periods are excluded for years (the view already flags them) and for
+# months at the record's edges: a company listed on the 28th has a "month"
+# of two sessions, and it would otherwise win or lose the ranking outright.
+JOURNEY_BEST_WORST_PERIODS = """
+WITH m AS (
+    SELECT year_month, month_return,
+           ROW_NUMBER() OVER (ORDER BY year_month)      AS rn_asc,
+           ROW_NUMBER() OVER (ORDER BY year_month DESC) AS rn_desc
+    FROM monthly_returns
+    WHERE symbol = :symbol AND month_return IS NOT NULL AND year_month <= :asof_month
+),
+full_months AS (
+    SELECT year_month, month_return FROM m WHERE rn_asc > 1 AND rn_desc > 1
+),
+y AS (
+    SELECT year, year_return
+    FROM yearly_summary
+    WHERE symbol = :symbol AND is_partial = 0 AND year_return IS NOT NULL
+      AND year <= :asof_year
+)
+-- Each branch is wrapped in its own subquery: in a compound SELECT, SQLite
+-- applies a trailing ORDER BY/LIMIT to the WHOLE result, so an unparenthesized
+-- `... UNION ALL ... ORDER BY x LIMIT 1` would return one row overall instead
+-- of one row per branch.
+SELECT * FROM (
+    SELECT 'month' AS period_type, 'best' AS extreme,
+           year_month AS period, month_return AS period_return
+    FROM full_months ORDER BY month_return DESC LIMIT 1)
+UNION ALL
+SELECT * FROM (
+    SELECT 'month', 'worst', year_month, month_return
+    FROM full_months ORDER BY month_return ASC LIMIT 1)
+UNION ALL
+SELECT * FROM (
+    SELECT 'year', 'best', year, year_return FROM y ORDER BY year_return DESC LIMIT 1)
+UNION ALL
+SELECT * FROM (
+    SELECT 'year', 'worst', year, year_return FROM y ORDER BY year_return ASC LIMIT 1);
+"""
+
+# Trend changes: 50/200 moving-average crossovers.
+#
+# The crossing session is the one where the SIGN of (ma_50 - ma_200) differs
+# from the previous session's, which is why both lagged values are carried. The
+# `moving_averages` view returns NULL until each window is full, so the first
+# 200 sessions produce no signal at all rather than a spurious one from a
+# partial average.
+JOURNEY_TREND_CHANGES = """
+WITH m AS (
+    SELECT date, close, ma_50, ma_200,
+           LAG(ma_50)  OVER (ORDER BY date) AS prev_50,
+           LAG(ma_200) OVER (ORDER BY date) AS prev_200
+    FROM moving_averages
+    WHERE symbol = :symbol AND ma_50 IS NOT NULL AND ma_200 IS NOT NULL
+)
+SELECT date, close,
+       CASE WHEN ma_50 > ma_200 THEN 'golden' ELSE 'death' END AS cross_type
+FROM m
+WHERE prev_50 IS NOT NULL AND prev_200 IS NOT NULL
+  AND (ma_50 > ma_200) <> (prev_50 > prev_200)
+  AND date <= :asof
+ORDER BY date;
+"""
+
+# Record-high behaviour over the whole record, as one row.
+#
+# `longest_dry_spell` is the largest gap in calendar days between consecutive
+# record highs -- the single most quotable "how long did it take to get back"
+# figure, and one that a reader cannot get by eye from a 25-year chart.
+JOURNEY_RECORD_SUMMARY = """
+WITH s AS (
+    SELECT date, close,
+           MAX(close) OVER (ORDER BY date ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
+               AS peak_close
+    FROM prices
+    WHERE symbol = :symbol AND close IS NOT NULL AND close > 0 AND date <= :asof
+),
+highs AS (
+    SELECT date, close,
+           LAG(date) OVER (ORDER BY date) AS prev_high_date
+    FROM s WHERE close >= peak_close
+)
+SELECT
+    COUNT(*) AS record_days,
+    MAX(close) AS record_close,
+    (SELECT date FROM highs ORDER BY close DESC, date ASC LIMIT 1) AS record_date,
+    (SELECT MAX(julianday(date) - julianday(prev_high_date)) FROM highs) AS longest_dry_spell,
+    (SELECT date FROM highs
+      WHERE julianday(date) - julianday(prev_high_date)
+            = (SELECT MAX(julianday(date) - julianday(prev_high_date)) FROM highs)
+      LIMIT 1) AS dry_spell_end_date
+FROM highs;
+"""
+
+# Curated company events, with the price move the market actually made around
+# each one attached.
+#
+# The join to prices is `date >= e.date` on the FIRST matching session: events
+# are dated to the day the news was actionable, and a good fraction of those
+# land on a weekend or a holiday. `forward_return` is measured over the next
+# `:sessions` sessions from the session before the event, so an event that broke
+# before the open is not credited with a move that had already happened.
+#
+# LEFT JOINs throughout: an event dated before the company's first price row
+# (an IPO in 1980, say) must still return its row so the Did You Know panel can
+# use it. Only the price columns come back NULL.
+JOURNEY_COMPANY_EVENTS = """
+WITH e AS (
+    SELECT ce.date, ce.title, ce.description, ce.category, ce.source,
+           ec.tone, ec.label
+    FROM company_events ce
+    JOIN event_categories ec ON ec.name = ce.category
+    WHERE ce.symbol = :symbol
+),
+anchored AS (
+    SELECT e.*,
+           (SELECT p.date FROM prices p
+             WHERE p.symbol = :symbol AND p.date >= e.date
+             ORDER BY p.date ASC LIMIT 1) AS session_date,
+           (SELECT p.close FROM prices p
+             WHERE p.symbol = :symbol AND p.date < e.date
+             ORDER BY p.date DESC LIMIT 1) AS close_before
+    FROM e
+)
+SELECT
+    a.date, a.title, a.description, a.category, a.source, a.tone, a.label,
+    a.session_date,
+    (SELECT close FROM prices
+      WHERE symbol = :symbol AND date = a.session_date) AS close_on,
+    a.close_before,
+    (SELECT close FROM prices
+      WHERE symbol = :symbol AND date >= a.session_date
+      ORDER BY date ASC LIMIT 1 OFFSET :sessions) / a.close_before - 1
+        AS forward_return
+FROM anchored a
+WHERE a.date <= :asof
+ORDER BY a.date;
+"""
+
+# Market-wide events, kept only where THIS company actually moved.
+#
+# A 25-year chart of any company can be papered over with the same 12 crash
+# markers, which teaches nothing about the company: the point of showing the
+# 2008 bottom on one name and not another is that one of them fell 80% and the
+# other fell 12%. The filter is therefore the company's own realized move across
+# the event, not the event's importance to the index. `:min_move` is a bind
+# parameter so the threshold is visible in the SQL rather than applied to the
+# frame afterwards.
+JOURNEY_MARKET_EVENT_IMPACT = """
+WITH m AS (
+    SELECT date, title, category, description FROM market_events WHERE date <= :asof
+),
+anchored AS (
+    SELECT m.*,
+           (SELECT p.close FROM prices p
+             WHERE p.symbol = :symbol AND p.date < m.date
+             ORDER BY p.date DESC LIMIT 1) AS close_before,
+           (SELECT p.close FROM prices p
+             WHERE p.symbol = :symbol AND p.date >= m.date
+             ORDER BY p.date ASC LIMIT 1 OFFSET :sessions) AS close_after
+    FROM m
+)
+SELECT date, title, category, description,
+       close_before, close_after,
+       close_after / close_before - 1 AS company_move
+FROM anchored
+WHERE close_before IS NOT NULL AND close_after IS NOT NULL
+  AND ABS(close_after / close_before - 1) >= :min_move
+ORDER BY date;
+"""
+
+# The price line the Journey draws, thinned to a drawable number of points.
+#
+# 6,300 sessions is more points than a 380px-tall chart can resolve, and the
+# Journey redraws on every playback tick rather than once per page load. Every
+# `:stride`-th session is kept, plus the running peak so the all-time-high band
+# stays exact -- a thinned series that dropped the peaks would show the record
+# line stepping below prices it is supposed to bound.
+JOURNEY_PRICE_PATH = """
+WITH s AS (
+    SELECT date, close,
+           MAX(close) OVER (ORDER BY date ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
+               AS peak_close,
+           ROW_NUMBER() OVER (ORDER BY date) AS rn,
+           COUNT(*)    OVER () AS total
+    FROM prices
+    WHERE symbol = :symbol AND close IS NOT NULL AND close > 0
+)
+SELECT date, close, peak_close,
+       (close - peak_close) / peak_close AS drawdown
+FROM s
+WHERE rn % :stride = 0 OR rn = 1 OR rn = total OR close >= peak_close
+ORDER BY date;
+"""
+
+
+# Registered here rather than in the EXPLORER literal above for the same reason
+# as the block before it: these statements are defined after that dict.
+EXPLORER.update({
+    "A company's position at a point in its history": {
+        "question": "Where did this company stand on a given date?",
+        "sql": JOURNEY_SNAPSHOT,
+        "params": ["symbol", "asof"],
+        "read_path": "Indexed scan",
+        "read_path_note": "Range-scanned per symbol",
+        "indexes": ["idx_prices_symbol_date (symbol, date)"],
+        "objects": ["prices"],
+        "powers": [
+            "Stock Journey → the playhead KPI row",
+            "Stock Journey → the record-high state chip",
+        ],
+        "explain": (
+            "**What it does.** Returns one row describing where a company stood on "
+            "`:asof`: its close, its return and CAGR since its first session, how far "
+            "below its running record it was, and whether that day set a new one.\n\n"
+            "**Why it exists.** The Journey replays a company forward in time, and "
+            "every figure on the page has to describe the SAME instant. Computing them "
+            "in one query rather than slicing a cached frame per card is what "
+            "guarantees they cannot disagree with each other.\n\n"
+            "**How it works.** A running `MAX(close)` over an unbounded preceding frame "
+            "gives the all-time high as of each row. The `:asof` row is selected with "
+            "`date <= :asof ... LIMIT 1` rather than by equality, because the cursor is "
+            "a calendar date and most calendar dates are not trading sessions — an "
+            "equality match would blank the panel on every weekend and holiday.\n\n"
+            "**The honesty check.** `return_to_date` is measured from the company's "
+            "first session in this dataset, which is not its IPO — the record starts "
+            "around 2001 whatever the company's actual age. The UI labels it as such."
+        ),
+    },
+    "Every drawdown a company has had": {
+        "question": "How far did it fall, how long was it down, and did it recover?",
+        "sql": JOURNEY_DRAWDOWN_EPISODES,
+        "params": ["symbol", "asof", "min_depth"],
+        "read_path": "Window scan",
+        "read_path_note": "Gaps-and-islands over the running peak",
+        "indexes": ["idx_prices_symbol_date (symbol, date)"],
+        "objects": ["prices"],
+        "powers": [
+            "Stock Journey → drawdown bands on the price path",
+            "Stock Journey → recovery periods in Did You Know",
+        ],
+        "explain": (
+            "**What it does.** Returns one row per drawdown episode deeper than "
+            "`:min_depth`: the peak it fell from, the trough, the depth, how long it "
+            "took to bottom, and the date it made a new high again.\n\n"
+            "**Why it exists.** A single 'max drawdown' number says a company once fell "
+            "57%; it does not say whether that took three weeks or three years, or "
+            "whether the recovery took a decade. The time axis is most of what a "
+            "drawdown actually costs an investor.\n\n"
+            "**How it works.** Gaps-and-islands. A session closing at the running "
+            "maximum opens a new episode, so a cumulative `SUM` of that flag labels "
+            "each one; the peak is the episode's first row and the recovery is the "
+            "first row of the *next* episode, reached with `LEAD`. The trough's date "
+            "needs a join back — `MIN(close)` gives the price but not the day.\n\n"
+            "**The honesty check.** `recovery_date` is NULL for an episode that has not "
+            "recovered, and it stays NULL. Coalescing it to the last date in the record "
+            "would report a company still 40% underwater as fully recovered.\n\n"
+            "**Why `:asof` cuts the source rows and not the results.** The Journey "
+            "replays history forward, so a cursor in 2003 must not be told that the "
+            "crash it is in the middle of recovered in 2012. Bounding the series before "
+            "the episodes are built returns a NULL recovery for anything still open at "
+            "the cursor — what was actually known at that moment. A filter applied to "
+            "finished episodes would leak the future, and `tests_journey.py` asserts "
+            "against exactly that."
+        ),
+    },
+    "Longest winning and losing streaks": {
+        "question": "What is the longest run of up or down days this company has had?",
+        "sql": JOURNEY_STREAKS,
+        "params": ["symbol", "asof", "direction", "limit"],
+        "read_path": "Window scan",
+        "read_path_note": "Gaps-and-islands over daily direction",
+        "indexes": ["idx_prices_symbol_date (symbol, date)"],
+        "objects": ["daily_returns (view)", "prices"],
+        "powers": ["Stock Journey → Did You Know streak facts"],
+        "explain": (
+            "**What it does.** Finds unbroken runs of up sessions (`:direction` = 1) or "
+            "down sessions (-1), longest first, with the return earned across each run."
+            "\n\n**How it works.** The difference between a row's position in the whole "
+            "series and its position among rows of the same direction is constant "
+            "within a run, so that difference labels the run — the standard "
+            "gaps-and-islands identity. Flat sessions are dropped *before* the labels "
+            "are computed, so an exactly-zero day ends a streak instead of merging two "
+            "separate ones into a longer fictitious one.\n\n"
+            "**Why the return comes from closes.** Compounding a run's daily returns "
+            "needs `EXP(SUM(LN(1+r)))` in SQLite and accumulates float error over a "
+            "long run. The close before the run and the close on its last day give the "
+            "same figure exactly, in one subquery each."
+        ),
+    },
+    "Company events, with the market's reaction": {
+        "question": "What happened at this company, and did the stock move on it?",
+        "sql": JOURNEY_COMPANY_EVENTS,
+        "params": ["symbol", "asof", "sessions"],
+        "read_path": "Indexed scan",
+        "read_path_note": "Curated events joined to the nearest session",
+        "indexes": ["idx_company_events (symbol, date)", "idx_prices_symbol_date (symbol, date)"],
+        "objects": ["company_events", "event_categories", "prices"],
+        "powers": [
+            "Stock Journey → the historical timeline",
+            "Stock Journey → chart annotations",
+        ],
+        "explain": (
+            "**What it does.** Returns the curated events for a company up to `:asof`, "
+            "each with the close before it and the return over the following "
+            "`:sessions` sessions.\n\n"
+            "**Why it exists.** A 25-year chart has craters and spikes in it, and "
+            "without labels the reader has to already know what they were. Attaching "
+            "the realized move to each event is what lets the page connect a story to a "
+            "shape rather than just placing a marker near one.\n\n"
+            "**How it works.** Events are dated to the day the news was actionable, and "
+            "many of those are weekends or holidays, so each is anchored to the first "
+            "session on or after its date. The forward return is measured from the "
+            "close *before* the event, so news that broke pre-open is not credited with "
+            "a move that had already happened.\n\n"
+            "**The honesty check.** The join is a LEFT JOIN and events before the "
+            "company's first price row still return, with NULL prices — an IPO in 1980 "
+            "is a true fact about the company even though this dataset starts in 2001. "
+            "`source` travels with every row so any claim can be re-verified.\n\n"
+            "**Extending it.** The events are rows in `company_events`, loaded from "
+            "`data/company_events.json` at build time and validated against `symbols` "
+            "and the category registry. Adding an event, a company or a whole category "
+            "is a data edit plus a rebuild — no application code changes."
+        ),
+    },
+    "Market events that actually moved this company": {
+        "question": "Which market-wide crises materially hit this specific company?",
+        "sql": JOURNEY_MARKET_EVENT_IMPACT,
+        "params": ["symbol", "asof", "sessions", "min_move"],
+        "read_path": "Indexed scan",
+        "read_path_note": "12 events, two correlated lookups each",
+        "indexes": ["idx_prices_symbol_date (symbol, date)"],
+        "objects": ["market_events", "prices"],
+        "powers": ["Stock Journey → market context on the timeline"],
+        "explain": (
+            "**What it does.** Takes the 12 market-defining sessions and keeps only "
+            "those where this company itself moved at least `:min_move` across the "
+            "event window.\n\n"
+            "**Why it exists.** Every company's 25-year chart can be papered over with "
+            "the same 12 crash markers, which teaches nothing about the company. The "
+            "informative fact is that 2008 took one name down 80% and another down 12% "
+            "— so the filter is the company's own realized move, not the event's "
+            "importance to the index.\n\n"
+            "**How it works.** Each event is anchored to the close before it and the "
+            "close `:sessions` sessions later, both by correlated subquery; the "
+            "threshold is applied in the `WHERE` clause as a bind parameter, so a "
+            "reader of the SQL can see exactly what 'materially affected' means. "
+            "Applying it to the returned frame instead would hide it."
+        ),
+    },
+})

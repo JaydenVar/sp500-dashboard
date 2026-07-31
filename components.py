@@ -260,13 +260,19 @@ def quote_strip(name: str, symbol: str, q: pd.Series, meta: str, pal: dict) -> N
 # ---------------------------------------------------------------------------
 # Charts
 # ---------------------------------------------------------------------------
-def chart(fig, *, key: str, config: dict, caption: str = "", controls: bool = True) -> None:
+def chart(fig, *, key: str, config: dict, caption: str = "", controls: bool = True,
+          select: bool = False):
     """Render a Plotly figure with a visible reset control.
 
     Zoom and pan live in the browser, so Python can't read them back. Bumping a
     nonce in the chart's key remounts the component, which is what actually
     discards the client-side view state -- the same thing the toolbar's "reset
     axes" does, but as a control a reader can find without hovering first.
+
+    `select=True` makes the chart report clicked points back to Python and
+    returns the selection; it is off by default because a chart that reruns the
+    script on every stray click is worse than one that does nothing. Only the
+    Journey uses it, where clicking an event marker is the point.
     """
     nonce_key = f"__nonce_{key}"
     nonce = st.session_state.get(nonce_key, 0)
@@ -290,7 +296,13 @@ def chart(fig, *, key: str, config: dict, caption: str = "", controls: bool = Tr
     # on every chart in the app as "The keyword arguments have been deprecated
     # ... use `config` instead". Revisit only after checking the signature:
     # `inspect.signature(st.plotly_chart)`.
+    if select:
+        return st.plotly_chart(
+            fig, use_container_width=True, config=config, key=f"{key}_{nonce}",
+            on_select="rerun", selection_mode="points",
+        )
     st.plotly_chart(fig, use_container_width=True, config=config, key=f"{key}_{nonce}")
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -389,3 +401,96 @@ def data_table(
             "⬇ Export CSV", data=view.to_csv(index=False), file_name=csv_name,
             mime="text/csv", key=f"{key}_dl", width="stretch",
         )
+
+
+# ---------------------------------------------------------------------------
+# Stock Journey
+# ---------------------------------------------------------------------------
+def journey_header(date_label: str, price: float, chip: tuple[str, str],
+                   ret_label: str, ret_dir: str) -> None:
+    """The cursor headline: the one line a reader tracks during playback."""
+    chip_text, chip_tone = chip
+    st.markdown(
+        f'<div class="jrn-head">'
+        f'<span class="jrn-date">{esc(date_label)}</span>'
+        f'<span class="jrn-price">{esc(fmt_price(price))}</span>'
+        f'<span class="chg chg-{esc(ret_dir)}">{esc(ret_label)}</span>'
+        f'<span class="jrn-spacer"></span>'
+        f'<span class="jrn-chip {esc(chip_tone)}">{esc(chip_text)}</span>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def did_you_know(facts, *, on_jump=None, key_prefix: str = "dyk") -> None:
+    """Render Did You Know cards, each optionally jumping the cursor to its date.
+
+    The card body is one HTML block and the jump is a separate small button
+    underneath, rather than the whole card being a widget: Streamlit has no
+    clickable-container primitive, and faking one with an invisible button
+    overlay breaks keyboard focus order and screen-reader labelling. A named
+    button is worse-looking and genuinely operable.
+    """
+    if not facts:
+        empty_state("No facts to show yet.",
+                    "Move the cursor further into the company's history.")
+        return
+
+    cols = st.columns(min(len(facts), 3))
+    for i, fact in enumerate(facts):
+        with cols[i % len(cols)]:
+            st.markdown(
+                f'<div class="dyk {esc(fact.tone)}">'
+                f'<div class="dyk-top"><span class="dyk-ico">{fact.icon}</span>'
+                f'<span class="dyk-head">{esc(fact.headline)}</span></div>'
+                f'<div class="dyk-body">{esc(fact.detail)}</div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+            if fact.jump_date and on_jump is not None:
+                st.button(
+                    "Go to this moment", key=f"{key_prefix}_{i}", width="stretch",
+                    on_click=on_jump, args=(fact.jump_date,),
+                    help=f"Move the journey cursor to {fact.jump_date}",
+                )
+
+
+def journey_timeline(moments, *, on_jump=None, key_prefix: str = "tl",
+                     limit: int = 40) -> None:
+    """The historical timeline beside the chart, newest first.
+
+    Newest first because the cursor is usually at the end of what has been
+    revealed, so the events nearest the playhead are the ones being read. The
+    `limit` keeps a 30-year mega-cap from rendering 80 rows and 80 buttons,
+    which is slow and is not a timeline anyone reads to the bottom of.
+    """
+    if not moments:
+        empty_state("Nothing has happened yet on this journey.",
+                    "Press play, or drag the cursor forward to reach the "
+                    "company's first recorded events.")
+        return
+
+    shown = list(reversed(moments))[:limit]
+    for i, m in enumerate(shown):
+        move_html = ""
+        if m.move is not None:
+            direction = "up" if m.move >= 0 else "down"
+            move_html = (f'<span class="tl-move {direction}">'
+                         f'{fmt_pct(m.move, 1)}</span>')
+        st.markdown(
+            f'<div class="tl-row {esc(m.tone)}">'
+            f'<div class="tl-date">{esc(m.date)}'
+            f'<span class="tl-kind">{esc(m.kind)}</span></div>'
+            f'<div class="tl-title">{esc(m.title)} {move_html}</div>'
+            f'<div class="tl-body">{esc(m.detail)}</div>'
+            + (f'<div class="tl-src">Source: {esc(m.source)}</div>' if m.source else "")
+            + "</div>",
+            unsafe_allow_html=True,
+        )
+        if on_jump is not None:
+            st.button("Jump here", key=f"{key_prefix}_{i}_{m.date}_{m.kind}",
+                      on_click=on_jump, args=(m.date,),
+                      help=f"Move the journey cursor to {m.date}")
+
+    if len(moments) > limit:
+        note(f"Showing the {limit} most recent of {len(moments)} moments so far.")

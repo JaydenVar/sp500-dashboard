@@ -7,17 +7,21 @@ the same SQL serves the index and every equity.
 from __future__ import annotations
 
 import csv
+import datetime as dt
 import gzip
+import json
 import os
 import sqlite3
 from pathlib import Path
 
+import events
 from db import get_connection
 
 DATA_DIR = Path(__file__).parent / "data"
 PRICES_GZ = DATA_DIR / "prices.csv.gz"
 PRICES_CSV = DATA_DIR / "prices.csv"  # accepted if present, but not what ships
 SYMBOLS_CSV = DATA_DIR / "symbols.csv"
+COMPANY_EVENTS_JSON = DATA_DIR / "company_events.json"
 DB_PATH = DATA_DIR / "sp500.db"
 
 # Bump when the schema changes. A deployed container keeps its disk between
@@ -25,12 +29,13 @@ DB_PATH = DATA_DIR / "sp500.db"
 # would otherwise be reused forever -- which is exactly how a single-symbol
 # database (no `symbols` table) kept breaking the multi-symbol app. The stamp
 # plus the object check below make a stale database rebuild itself.
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 REQUIRED_OBJECTS = frozenset({
     "prices", "symbols", "symbol_stats", "latest_quote",
     "daily_returns", "drawdowns", "moving_averages", "rolling_volatility",
     "yearly_summary", "monthly_returns",
+    "company_events", "event_categories", "market_events",
 })
 
 
@@ -64,11 +69,46 @@ CREATE TABLE symbols (
     industry TEXT,
     is_index INTEGER NOT NULL DEFAULT 0
 );
+
+-- Curated company history, loaded from data/company_events.json. Kept as a
+-- table rather than a Python literal so adding events is a data edit: the
+-- Journey timeline reads it through SQL like every other figure in the app.
+DROP TABLE IF EXISTS company_events;
+CREATE TABLE company_events (
+    symbol      TEXT NOT NULL,
+    date        TEXT NOT NULL,
+    title       TEXT NOT NULL,
+    description TEXT NOT NULL,
+    category    TEXT NOT NULL,
+    source      TEXT NOT NULL
+);
+
+-- The category registry from the same file. A new category is a row here, not
+-- a branch in the UI: `tone` is what the palette maps to a color.
+DROP TABLE IF EXISTS event_categories;
+CREATE TABLE event_categories (
+    name  TEXT PRIMARY KEY,
+    tone  TEXT NOT NULL,
+    label TEXT NOT NULL
+);
+
+-- Market-wide sessions, loaded from events.py so that module stays the single
+-- source for them (the existing chart overlays still import it directly). In
+-- SQL they can be joined against prices, which is how the Journey decides
+-- whether a market event actually moved the company being viewed.
+DROP TABLE IF EXISTS market_events;
+CREATE TABLE market_events (
+    date        TEXT NOT NULL PRIMARY KEY,
+    title       TEXT NOT NULL,
+    category    TEXT NOT NULL,
+    description TEXT NOT NULL
+);
 """
 
 INDEXES_SQL = """
 CREATE INDEX IF NOT EXISTS idx_prices_symbol_date ON prices(symbol, date);
 CREATE INDEX IF NOT EXISTS idx_prices_date        ON prices(date);
+CREATE INDEX IF NOT EXISTS idx_company_events     ON company_events(symbol, date);
 """
 
 VIEWS_SQL = """
@@ -317,6 +357,82 @@ def _load_symbols(conn: sqlite3.Connection) -> int:
     return len(rows)
 
 
+EVENT_FIELDS = ("symbol", "date", "title", "description", "category", "source")
+
+
+def _validate_event(row: dict, i: int, known_symbols: set[str],
+                    known_categories: set[str]) -> tuple:
+    """Check one curated event and return it as an insertable tuple.
+
+    Every failure raises rather than skipping the row. A dropped event is
+    invisible in the UI -- it looks exactly like a company that has no history
+    curated yet -- so a typo would otherwise sit in the file indefinitely.
+    """
+    where = f"company_events.json event #{i}"
+    for field in EVENT_FIELDS:
+        value = row.get(field)
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"{where}: '{field}' must be a non-empty string")
+
+    if row["symbol"] not in known_symbols:
+        raise ValueError(f"{where}: unknown symbol {row['symbol']!r}")
+    if row["category"] not in known_categories:
+        raise ValueError(f"{where}: unknown category {row['category']!r}")
+    try:
+        dt.date.fromisoformat(row["date"])
+    except ValueError as exc:
+        raise ValueError(f"{where}: date must be ISO YYYY-MM-DD, got {row['date']!r}") from exc
+
+    return tuple(row[f].strip() for f in EVENT_FIELDS)
+
+
+def _load_company_events(conn: sqlite3.Connection) -> tuple[int, int]:
+    """Load the curated events and their category registry.
+
+    Symbols are validated against the `symbols` table, so this must run after
+    `_load_symbols`.
+    """
+    if not COMPANY_EVENTS_JSON.exists():
+        raise FileNotFoundError(f"Missing {COMPANY_EVENTS_JSON}.")
+
+    with COMPANY_EVENTS_JSON.open() as f:
+        payload = json.load(f)
+
+    categories = payload.get("categories") or []
+    if not categories:
+        raise ValueError("company_events.json: 'categories' is empty")
+    cat_rows = [(c["name"], c["tone"], c["label"]) for c in categories]
+    conn.executemany(
+        "INSERT OR REPLACE INTO event_categories (name, tone, label) VALUES (?, ?, ?)",
+        cat_rows,
+    )
+
+    known_symbols = {r[0] for r in conn.execute("SELECT symbol FROM symbols")}
+    known_categories = {c[0] for c in cat_rows}
+    rows = [
+        _validate_event(row, i, known_symbols, known_categories)
+        for i, row in enumerate(payload.get("events") or [], start=1)
+    ]
+    conn.executemany(
+        "INSERT INTO company_events"
+        " (symbol, date, title, description, category, source)"
+        " VALUES (?, ?, ?, ?, ?, ?)",
+        rows,
+    )
+    return len(rows), len(cat_rows)
+
+
+def _load_market_events(conn: sqlite3.Connection) -> int:
+    """Mirror `events.EVENTS` into SQL. That module stays the source of truth."""
+    rows = [(date, short, cat, note) for date, short, cat, note in events.EVENTS]
+    conn.executemany(
+        "INSERT OR REPLACE INTO market_events (date, title, category, description)"
+        " VALUES (?, ?, ?, ?)",
+        rows,
+    )
+    return len(rows)
+
+
 def db_is_current(path: Path = DB_PATH) -> bool:
     """True only if `path` is a database this version of the code built.
 
@@ -360,6 +476,8 @@ def main() -> None:
         conn.executescript(SCHEMA_SQL)
         n_prices = _load_prices(conn)
         n_symbols = _load_symbols(conn)
+        n_events, n_cats = _load_company_events(conn)  # validates against `symbols`
+        n_market = _load_market_events(conn)
         conn.executescript(INDEXES_SQL)
         conn.executescript(VIEWS_SQL)
         conn.executescript(MATERIALIZE_SQL)
@@ -379,6 +497,7 @@ def main() -> None:
 
     os.replace(tmp_path, DB_PATH)  # atomic on the same filesystem
     print(f"Loaded {n_prices:,} price rows across {n_symbols} symbols -> {DB_PATH}")
+    print(f"       {n_events} company events in {n_cats} categories, {n_market} market events")
 
 
 if __name__ == "__main__":

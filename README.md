@@ -44,6 +44,7 @@ anywhere.
 | **Overview** | *Ask the Market* search, index quote, KPIs, price with market events, volume |
 | **Market** | Breadth, sector performance, full movers table |
 | **Companies** | Ticker/name search, company page, price, moving averages, volume, returns, cumulative return, volatility, drawdown, and multi-metric comparison |
+| **Journey** | *Stock Journey* — travel through one company's whole history with playback, a live timeline and "Did you know?" facts |
 | **Performance** | Long-run leaderboard, calendar-year returns, monthly seasonality |
 | **Risk** | Drawdown curve, rolling volatility, risk-vs-return scatter |
 | **Portfolio** | Weighted basket simulator with return, CAGR, volatility and drawdown |
@@ -84,6 +85,52 @@ Twelve market-defining sessions — the dot-com bottom, Lehman, the 2009 trough,
 the COVID crash and recovery, the inflation cycle — overlay the charts with hover
 explanations, so a 25-year chart explains its own craters.
 
+### Stock Journey
+
+Pick a company and travel through its history. A cursor — drag it, press play, or
+click the chart, a timeline entry or a fact card — selects a point in the record,
+and every panel re-queries at that instant: where the company stood, how far below
+its record it was, and what had happened to it so far.
+
+The chart reveals as you travel: solid where you have been, faint where you have
+not, on a log axis so a 2008 crash stays visible on a name that has since gone up
+a hundredfold. Beneath it, a strip showing the distance below the running
+all-time high at every point.
+
+The timeline merges three sources:
+
+1. **Curated company events** — IPOs, splits, acquisitions, CEO changes, product
+   launches, crises. 256 of them across all 50 companies, each with a source.
+2. **Computed milestones** — crash troughs with their recovery dates, and the
+   largest single sessions, derived from the price data.
+3. **Market-wide events, filtered to the ones that actually hit this company.**
+   Any company's chart could be papered with the same twelve crash markers; the
+   informative fact is that 2008 took one name down 80% and another down 12%. So
+   the test is the company's own realized move, applied in the SQL.
+
+**Did you know?** updates as you travel: record highs, the longest stretch without
+one, best and worst days, months and years, the longest winning and losing streaks,
+the deepest crash and how long the round trip took.
+
+#### Adding company events
+
+`data/company_events.json` is data, not code. Add a row, run `build_db.py`, and it
+appears — no application changes:
+
+```json
+{
+  "symbol": "AAPL", "date": "2007-01-09", "title": "iPhone unveiled",
+  "description": "Steve Jobs introduced the iPhone at Macworld…",
+  "category": "Product Launch", "source": "Apple Newsroom, 9 Jan 2007"
+}
+```
+
+The loader validates every row against `symbols` and the category registry and
+**fails the build** on a bad one, rather than skipping it — a dropped event is
+invisible in the UI and looks identical to a company with no history curated yet.
+New categories are a row in the same file's `categories` list; their `tone` is what
+the palette maps to a color.
+
 ## Architecture
 
 ```
@@ -94,6 +141,7 @@ data_access.py  cached query layer (st.cache_data) — the only place SQL is run
 charts.py       Plotly builders + one shared styling function
 components.py   header, KPI cards, quote strip, chart + table helpers
 events.py       market timeline events with hover explanations
+journey.py      Stock Journey narrative layer — picks and phrases facts, no math
 ask.py          natural-language intent routing (no LLM)
 answers.py      renders an answer per intent from existing queries
 devcenter.py    the Developer Center, incl. SQL Explorer and Interview Mode
@@ -115,6 +163,9 @@ app.py          layout and interaction only — no analysis
 | `monthly_returns` | view | per-month return (seasonality grid) |
 | `symbol_stats` | **materialized** | one row per symbol: CAGR, volatility, max drawdown, liquidity |
 | `latest_quote` | **materialized** | newest session, prior close, trailing 52-week range |
+| `company_events` | table | curated company history, loaded from `data/company_events.json` |
+| `event_categories` | table | the category registry that drives event color and labelling |
+| `market_events` | table | the market timeline, mirrored from `events.py` so it can join to prices |
 
 ### Performance
 
@@ -172,6 +223,16 @@ Things this data genuinely cannot support, stated rather than papered over:
 - **Market status is schedule-based** (weekday 09:30–16:00 ET); exchange
   holidays are not modelled, and the label says so.
 - **Partial calendar years** at each end of the window are flagged and faded.
+- **IPO dates and stock splits are curated, not derived.** The price record
+  starts around 2001, so a company's first row is not its listing date — Apple's
+  is 2001, not 1980. And Yahoo's `close` is already split-adjusted while
+  `adj_close` adjusts for splits *and* dividends, so a split leaves no trace in
+  either column. Both therefore come from `data/company_events.json` with a
+  source attached, or are not claimed at all. The Journey says "first session in
+  this dataset" and never calls it an IPO.
+- **Curated events are a best effort, and dated.** Each carries a `source` so it
+  can be re-verified, and coverage is deeper for large, well-documented companies
+  than for the rest.
 
 ## Notes on fetching
 

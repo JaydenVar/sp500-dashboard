@@ -533,3 +533,162 @@ def generic_bars(df, pal: dict, *, label_col: str, value_col: str,
     if signed:
         fig.add_vline(x=0, line_color=pal["baseline"], line_width=1)
     return fig
+
+
+# ---------------------------------------------------------------------------
+# Stock Journey
+# ---------------------------------------------------------------------------
+def journey_path(df, pal: dict, *, asof, moments=None, height: int = H_PRIMARY,
+                 log: bool = True, show_peak: bool = True) -> go.Figure:
+    """The Journey's primary chart: a company's whole record, revealed to `asof`.
+
+    Progressive reveal is drawn as TWO traces over the same series rather than
+    by truncating the frame: the travelled part in full color, the rest as a
+    faint ghost. Truncating instead would rescale both axes on every playback
+    tick, so the line would writhe as it grew and the reader would lose the
+    shape they were following. With the ghost present the axes are fixed by the
+    full record from the first frame, and only the reveal moves.
+
+    Log scale is the default here and not elsewhere: a journey covers a
+    company's entire record, and over 25 years a linear axis compresses the
+    first decade into the baseline -- the 2008 crash becomes invisible on a name
+    that has since gone up 100x. On a log axis equal vertical distances are
+    equal PERCENTAGE moves, which is what the narrative is about.
+    """
+    asof = str(asof)[:10]
+    fig = go.Figure()
+    color = pal["series"][0]
+
+    travelled = df[df["date"].astype(str).str[:10] <= asof]
+
+    # The ghost: the whole record, drawn first so the reveal sits on top of it.
+    fig.add_trace(go.Scatter(
+        x=df["date"], y=df["close"], mode="lines", name="Not yet reached",
+        line=dict(color=pal["muted"], width=1),
+        opacity=0.28, hoverinfo="skip", showlegend=False,
+    ))
+
+    if show_peak and len(travelled):
+        # The running all-time high as a step above the price. It is what makes
+        # a drawdown legible as distance rather than as a dip: the gap between
+        # the two lines IS the drawdown at every point.
+        fig.add_trace(go.Scatter(
+            x=travelled["date"], y=travelled["peak_close"], mode="lines",
+            name="All-time high",
+            line=dict(color=pal["up"], width=1, dash="dot", shape="hv"),
+            hoverinfo="skip", showlegend=False,
+        ))
+
+    if len(travelled):
+        fig.add_trace(go.Scatter(
+            x=travelled["date"], y=travelled["close"], mode="lines", name="Close",
+            line=dict(color=color, width=2),
+            fill="tozeroy", fillcolor=wash(color, 0.10),
+            hovertemplate="<b>%{y:,.2f}</b><extra></extra>",
+        ))
+        # The playhead: a dot at the cursor, so the eye has somewhere to be
+        # during playback. A vertical rule alone reads as a gridline.
+        last = travelled.iloc[-1]
+        fig.add_trace(go.Scatter(
+            x=[last["date"]], y=[last["close"]], mode="markers",
+            marker=dict(size=11, color=color,
+                        line=dict(width=2.5, color=pal["surface"])),
+            hovertemplate="<b>%{y:,.2f}</b><extra></extra>",
+            showlegend=False, name="Now",
+        ))
+        fig.add_vline(x=last["date"], line_width=1, line_color=color, opacity=0.35)
+
+    fig = style(fig, pal, y_title="Price (log)" if log else "Price", height=height)
+    if log:
+        fig.update_yaxes(type="log")
+
+    # Both axes are pinned to the FULL record, not to the revealed part. This is
+    # the whole reason the ghost trace exists -- see the docstring.
+    if len(df):
+        fig.update_xaxes(range=[df["date"].min(), df["date"].max()])
+
+    if moments:
+        _annotate_moments(fig, pal, moments)
+    return fig
+
+
+# Marker glyph per timeline kind. A new event category needs no entry here: the
+# Journey passes `kind`, which is one of three structural roles, while the
+# category's own color comes from its `tone` in the events data.
+_MOMENT_SYMBOL = {"company": "circle", "market": "square", "milestone": "diamond"}
+
+
+def _annotate_moments(fig: go.Figure, pal: dict, moments) -> None:
+    """Place clickable-looking markers for timeline entries on the price axis.
+
+    One trace per kind so the shapes stay distinguishable without relying on
+    color -- the house rule is that identity never rests on color alone, and a
+    reader with a color vision deficiency still has three distinct glyphs.
+
+    The markers ride the same invisible 0..1 overlay axis `add_events` uses, so
+    they sit at a fixed height whatever the price scale is doing.
+    """
+    tone_color = {
+        "positive": pal["up"], "negative": pal["down"],
+        "milestone": pal["series"][3], "neutral": pal["muted"],
+    }
+    by_kind: dict[str, list] = {}
+    for m in moments:
+        by_kind.setdefault(m.kind, []).append(m)
+
+    for kind, group in by_kind.items():
+        heights = {"company": 0.97, "market": 0.90, "milestone": 0.83}
+        fig.add_trace(go.Scatter(
+            x=[m.date for m in group],
+            y=[heights.get(kind, 0.95)] * len(group),
+            yaxis="y2", mode="markers",
+            marker=dict(size=9, symbol=_MOMENT_SYMBOL.get(kind, "circle"),
+                        color=[tone_color.get(m.tone, pal["muted"]) for m in group],
+                        line=dict(width=1.5, color=pal["surface"])),
+            text=[
+                f"<b>{m.title}</b><br>{m.date}"
+                + (f"<br>Move: {m.move:+.1%}" if m.move is not None else "")
+                + f"<br>{_wrap(m.detail, 46)}"
+                for m in group
+            ],
+            hovertemplate="%{text}<extra></extra>",
+            hoverlabel=dict(align="left"),
+            showlegend=False, name=kind,
+        ))
+
+    fig.update_layout(yaxis2=dict(
+        overlaying="y", side="right", range=[0, 1],
+        showgrid=False, zeroline=False, showticklabels=False,
+        fixedrange=True, visible=False,
+    ))
+
+
+def journey_drawdown_band(df, pal: dict, *, asof, height: int = H_STRIP) -> go.Figure:
+    """The companion strip: how far below the record the company was, over time.
+
+    Paired with `journey_path` above it and revealed to the same cursor, so the
+    two read as one instrument. Drawdown is always <= 0, so the axis is fixed
+    from the record's worst point to zero rather than auto-ranging -- an
+    auto-ranged strip rescales as the reveal advances and a 5% dip early in the
+    record looks identical to a 50% crash later on.
+    """
+    asof = str(asof)[:10]
+    travelled = df[df["date"].astype(str).str[:10] <= asof]
+    fig = go.Figure()
+
+    if len(travelled):
+        fig.add_trace(go.Scatter(
+            x=travelled["date"], y=travelled["drawdown"], mode="lines",
+            line=dict(color=pal["down"], width=1.5),
+            fill="tozeroy", fillcolor=wash(pal["down"], 0.16),
+            hovertemplate="<b>%{y:.1%}</b> below high<extra></extra>",
+            showlegend=False,
+        ))
+
+    fig = style(fig, pal, y_title="Drawdown", height=height, zero_line=True)
+    fig.update_yaxes(tickformat=".0%")
+    if len(df):
+        fig.update_xaxes(range=[df["date"].min(), df["date"].max()])
+        worst = float(df["drawdown"].min())
+        fig.update_yaxes(range=[worst * 1.08, 0.02])
+    return fig

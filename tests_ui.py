@@ -40,7 +40,8 @@ from streamlit.testing.v1 import AppTest
 import queries
 
 APP = str(pathlib.Path(__file__).parent / "app.py")
-SECTIONS = ["Overview", "Market", "Companies", "Performance", "Risk", "Portfolio", "About"]
+SECTIONS = ["Overview", "Market", "Companies", "Journey",
+            "Performance", "Risk", "Portfolio", "About"]
 PRESETS = ["1M", "1Y", "10Y", "All Time"]
 
 _failures = 0
@@ -86,6 +87,33 @@ for syms in ([], ["AAPL"], ["META", "TSLA"], ["AAPL", "MSFT", "NVDA", "AMZN"]):
 print("=== the shortest window, where queries come back empty ===")
 for section in ("Market", "Companies", "Performance", "Risk", "Portfolio"):
     run(f"{section} · 1M", {"section": section, "preset": "1M"})
+
+print("=== stock journey: cursor positions and companies ===")
+# The Journey's own edge is a cursor that is valid for one company and not for
+# another. `jrn_slider` survives a company change in a real session, so the
+# reset-on-change path has to hold for a 2010 listing viewed at a 2003 cursor.
+import datetime as dt  # noqa: E402  (test-local, not part of the app's imports)
+
+for sym, label in (("AAPL — Apple Inc.", "AAPL"),
+                   ("TSLA — Tesla, Inc.", "TSLA"),
+                   ("META — Meta Platforms, Inc.", "META")):
+    for cursor, when in ((dt.date(2003, 6, 30), "2003"),
+                         (dt.date(2013, 1, 2), "2013"),
+                         (dt.date(2026, 7, 1), "2026")):
+        run(f"Journey · {label} @ {when}",
+            {"section": "Journey", "jrn_symbol": sym, "jrn_slider": cursor})
+
+for speed in ("Slow", "Medium", "Fast"):
+    run(f"Journey · speed {speed}", {"section": "Journey", "jrn_speed": speed})
+
+# Playback mid-flight: the fragment advances the cursor and must not write a
+# widget key that already exists this run.
+run("Journey · playing", {"section": "Journey", "jrn_playing": True,
+                          "jrn_slider": dt.date(2010, 1, 4)})
+# A cursor at the very first session, where most fact queries return nothing.
+run("Journey · at the first session",
+    {"section": "Journey", "jrn_symbol": "TSLA — Tesla, Inc.",
+     "jrn_slider": dt.date(2010, 6, 29)})
 
 print("=== developer center: every SQL Explorer entry executes ===")
 for i, name in enumerate(queries.EXPLORER):

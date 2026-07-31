@@ -483,6 +483,94 @@ label[data-testid="stWidgetLabel"] p {{
 @keyframes shimmer {{ 0% {{ background-position: 200% 0; }} 100% {{ background-position: -200% 0; }} }}
 @media (prefers-reduced-motion: reduce) {{ .skel {{ animation: none; }} }}
 
+/* ---------- Stock Journey ---------- */
+/* The cursor headline. Large because during playback it is the only thing on
+   the page that a reader tracks continuously. */
+.jrn-head {{
+  display: flex; align-items: baseline; flex-wrap: wrap; gap: 10px 16px;
+  padding: 14px 16px; margin: 6px 0 10px;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 10px; box-shadow: var(--shadow);
+}}
+.jrn-date {{
+  font-size: 1.45rem; font-weight: 660; color: var(--text-1);
+  letter-spacing: -0.01em; font-variant-numeric: tabular-nums;
+}}
+.jrn-price {{ font-size: 1.2rem; font-weight: 600; font-variant-numeric: tabular-nums; }}
+.jrn-spacer {{ flex: 1 1 auto; }}
+/* State chip. Carries an icon as well as a hue -- the house rule is that
+   identity never rests on color alone. */
+.jrn-chip {{
+  font-size: 0.74rem; font-weight: 640; letter-spacing: .02em;
+  padding: 4px 10px; border-radius: 999px; white-space: nowrap;
+  border: 1px solid transparent;
+}}
+.jrn-chip.positive {{ color: var(--up); background: var(--up-bg); border-color: var(--up); }}
+.jrn-chip.negative {{ color: var(--down); background: var(--down-bg); border-color: var(--down); }}
+.jrn-chip.neutral  {{ color: var(--muted); background: var(--surface-2); border-color: var(--border); }}
+
+/* Did You Know cards. */
+.dyk-grid {{
+  display: grid; gap: 10px; margin: 4px 0 8px;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+}}
+.dyk {{
+  background: var(--surface); border: 1px solid var(--border);
+  border-left: 3px solid var(--border-strong);
+  border-radius: 9px; padding: 11px 13px;
+  transition: transform .16s ease, box-shadow .16s ease;
+}}
+.dyk:hover {{ transform: translateY(-2px); box-shadow: var(--shadow-hover); }}
+.dyk.positive  {{ border-left-color: var(--up); }}
+.dyk.negative  {{ border-left-color: var(--down); }}
+.dyk.milestone {{ border-left-color: var(--accent); }}
+.dyk-top {{ display: flex; align-items: center; gap: 7px; margin-bottom: 5px; }}
+.dyk-ico {{ font-size: 0.95rem; line-height: 1; }}
+.dyk-head {{
+  font-size: 0.86rem; font-weight: 640; color: var(--text-1);
+  line-height: 1.3; font-variant-numeric: tabular-nums;
+}}
+.dyk-body {{ font-size: 0.755rem; color: var(--text-2); line-height: 1.5; }}
+
+/* Timeline. A rail with one row per moment; scrolls inside its own box so a
+   40-event company doesn't push the chart off the screen. */
+.tl {{
+  max-height: 420px; overflow-y: auto; padding: 2px 4px 2px 0;
+  border-left: 2px solid var(--border); margin-left: 6px;
+}}
+.tl-row {{ position: relative; padding: 0 0 14px 20px; }}
+.tl-row::before {{
+  content: ""; position: absolute; left: -7px; top: 4px;
+  width: 11px; height: 11px; border-radius: 50%;
+  background: var(--muted); border: 2px solid var(--surface);
+}}
+.tl-row.positive::before  {{ background: var(--up); }}
+.tl-row.negative::before  {{ background: var(--down); }}
+.tl-row.milestone::before {{ background: var(--accent); }}
+.tl-date {{
+  font-size: 0.68rem; font-weight: 620; color: var(--muted);
+  letter-spacing: .04em; text-transform: uppercase; font-variant-numeric: tabular-nums;
+}}
+.tl-title {{ font-size: 0.82rem; font-weight: 620; color: var(--text-1); line-height: 1.35; margin: 1px 0 2px; }}
+.tl-body {{ font-size: 0.73rem; color: var(--text-2); line-height: 1.5; }}
+.tl-move {{ font-size: 0.72rem; font-weight: 640; font-variant-numeric: tabular-nums; }}
+.tl-move.up   {{ color: var(--up); }}
+.tl-move.down {{ color: var(--down); }}
+.tl-src {{ font-size: 0.66rem; color: var(--muted); opacity: .85; margin-top: 3px; }}
+/* Kind badge: the third channel (with glyph and color) telling a curated
+   company event apart from a market event and from a computed milestone. */
+.tl-kind {{
+  display: inline-block; font-size: 0.6rem; font-weight: 680; letter-spacing: .06em;
+  text-transform: uppercase; padding: 1px 6px; border-radius: 4px;
+  background: var(--surface-2); color: var(--muted); border: 1px solid var(--border);
+  margin-left: 6px; vertical-align: 1px;
+}}
+
+@media (prefers-reduced-motion: reduce) {{
+  .dyk {{ transition: none; }}
+  .dyk:hover {{ transform: none; }}
+}}
+
 /* ---------- responsive ---------- */
 @media (max-width: 900px) {{
   .hdr {{ flex-direction: column; align-items: flex-start; gap: 12px; }}

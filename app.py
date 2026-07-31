@@ -29,6 +29,7 @@ import components as ui
 import data_access as dal
 import devcenter
 import events
+import journey
 import nlq
 import queries
 import router
@@ -61,6 +62,42 @@ CUSTOM_PRESET = "Custom Range"
 # between Market and Companies keeps every figure describing the same period,
 # which is what makes reading across sections trustworthy.
 WINDOWED_SECTIONS = ("Overview", "Market", "Companies", "Risk", "Portfolio")
+
+# Two entirely separate experiences. User Mode never shows SQL, schemas, timings
+# or implementation detail -- mixing those into an end-user screen is what makes
+# an app read as a class project rather than a product.
+#
+# Defined up here, beside WINDOWED_SECTIONS, so the scope banner can DERIVE the
+# always-all-time list instead of naming it in prose. It previously read
+# "Performance and About", which silently became wrong the moment a third
+# all-time section was added.
+USER_SECTIONS = ["Overview", "Market", "Companies", "Journey",
+                 "Performance", "Risk", "Portfolio", "About"]
+ALLTIME_SECTIONS = tuple(s for s in USER_SECTIONS if s not in WINDOWED_SECTIONS
+                         and s != "About")
+
+# Stock Journey playback. `JOURNEY_STEPS` is calendar days advanced per tick --
+# a journey is 25 years long, so a step of one session would take 40 minutes to
+# play through and nobody would watch it.
+JOURNEY_STEPS: dict[str, int] = {"Slow": 20, "Medium": 60, "Fast": 150}
+JOURNEY_DEFAULT_SPEED = "Medium"
+JOURNEY_TICK = 0.4  # seconds between playback frames
+
+# Keep every 3rd session. 6,300 points is far more than a 380px chart can
+# resolve, and the Journey redraws on every playback frame rather than once per
+# page load. The query keeps all record highs regardless of the stride, so
+# thinning cannot make the all-time-high line cut below the price it bounds.
+JOURNEY_STRIDE = 3
+# Only drawdowns worth narrating. Below ~15% a long record produces dozens of
+# episodes and the timeline becomes noise rather than a story.
+JOURNEY_MIN_DRAWDOWN = -0.15
+# Sessions over which an event's effect is measured. One session is too tight
+# (news after the close lands on the next day) and a month stops being about
+# the event at all.
+JOURNEY_EVENT_SESSIONS = 5
+# How much THIS company must have moved for a market-wide event to appear on
+# its timeline. See the JOURNEY_MARKET_EVENT_IMPACT comment in queries.py.
+JOURNEY_MIN_MOVE = 0.05
 
 # Rolling-return horizons, as SESSION counts (~252 trading days a year). A
 # holding-period length, not a date filter: it selects how long each period is,
@@ -207,9 +244,11 @@ START, END = start_d.isoformat(), end_d.isoformat()
 # has no figures to scope. A control that overstates its reach makes a reader
 # distrust the ones it does govern.
 _named = f"{', '.join(WINDOWED_SECTIONS[:-1])} and {WINDOWED_SECTIONS[-1]}"
+_alltime = f"{' and '.join(ALLTIME_SECTIONS)}" if len(ALLTIME_SECTIONS) < 3 else (
+    f"{', '.join(ALLTIME_SECTIONS[:-1])} and {ALLTIME_SECTIONS[-1]}")
 scope_note = (
     "seeds the SQL Explorer window" if DEV
-    else f"applies to {_named} · Performance and About are always all-time"
+    else f"applies to {_named} · {_alltime} and About are always all-time"
 )
 st.markdown(
     f'<div class="note">'
@@ -219,11 +258,6 @@ st.markdown(
     f' · {preset} · {scope_note}</div>',
     unsafe_allow_html=True,
 )
-
-# Two entirely separate experiences. User Mode never shows SQL, schemas, timings
-# or implementation detail -- mixing those into an end-user screen is what makes
-# an app read as a class project rather than a product.
-USER_SECTIONS = ["Overview", "Market", "Companies", "Performance", "Risk", "Portfolio", "About"]
 
 # Deliberately a radio, not st.tabs. st.tabs renders EVERY tab's body on every
 # rerun, which (a) runs all sections' queries when only one is visible and
@@ -695,6 +729,242 @@ if not DEV and section == "Companies":
                     "suggest any correlation you like. Where a symbol listed after the "
                     "window opened, its series starts later — see 'First data'."
                 )
+
+
+# ---------------------------------------------------------------------------
+# Journey — one company's whole record, replayed forward in time
+# ---------------------------------------------------------------------------
+# ALL-TIME by construction, so it is not in WINDOWED_SECTIONS: a journey is the
+# company's entire history, and the cursor selects a POINT inside that record
+# rather than narrowing it. This is not the per-section date filter that was
+# proposed and rejected twice -- nothing here re-baselines a figure that another
+# section also shows.
+#
+# WIDGET-KEY DISCIPLINE, which the whole section is arranged around: Streamlit
+# forbids writing a widget's key after that widget has been instantiated in the
+# current run. The cursor is moved from four places (playback, a timeline jump,
+# a Did You Know jump, a chart click), so the slider is created INSIDE the
+# fragment with every cursor write happening above it. Button callbacks are safe
+# anywhere because on_click fires before the next run builds any widget.
+if not DEV and section == "Journey":
+    jrn_labels = {f"{r.symbol} — {r['name']}": r.symbol for _, r in equities.iterrows()}
+    jrn_keys = list(jrn_labels)
+    jrn_default = next((k for k in jrn_keys if jrn_labels[k] == "AAPL"), jrn_keys[0])
+
+    ui.section("Stock Journey", "Travel through a company's history and watch it happen")
+
+    head = st.columns([2.4, 1.15, 1.15])
+    with head[0]:
+        jrn_label = st.selectbox(
+            "Search company or ticker", jrn_keys,
+            index=jrn_keys.index(st.session_state.get("jrn_symbol", jrn_default))
+            if st.session_state.get("jrn_symbol") in jrn_keys else jrn_keys.index(jrn_default),
+            key="jrn_symbol", help="Type a ticker (AAPL) or a company name (Apple)",
+        )
+    jsym = jrn_labels[jrn_label]
+    jmeta = equities[equities["symbol"] == jsym].iloc[0]
+    j_min, j_max = dal.date_bounds(jsym)
+
+    with head[1]:
+        jrn_speed = st.radio("Speed", list(JOURNEY_STEPS), horizontal=True,
+                             index=list(JOURNEY_STEPS).index(JOURNEY_DEFAULT_SPEED),
+                             key="jrn_speed", label_visibility="collapsed",
+                             help="How much history each playback frame advances")
+
+    # A default selection must follow its subject. The cursor is reset whenever
+    # the company changes -- otherwise switching from Apple to a company that
+    # listed in 2020 leaves the cursor in 2015, before that company has a single
+    # price row, and every panel empties at once. Written here, before the
+    # slider exists, which is the only point Streamlit allows it.
+    if st.session_state.get("jrn_last_symbol") != jsym:
+        st.session_state["jrn_last_symbol"] = jsym
+        st.session_state["jrn_slider"] = j_max
+        st.session_state["jrn_playing"] = False
+        st.session_state.pop("jrn_pending_jump", None)
+
+    # Clamp a cursor that survived a company change or a hot-update. st.slider
+    # raises on a stored value outside its own min/max, the same failure mode
+    # the date preset had.
+    stored = st.session_state.get("jrn_slider")
+    if isinstance(stored, dt.date) and not (j_min <= stored <= j_max):
+        st.session_state["jrn_slider"] = min(max(stored, j_min), j_max)
+
+    def jrn_jump(date_str: str) -> None:
+        """Move the cursor. Safe from a button callback: it runs before the rerun."""
+        target = dt.date.fromisoformat(str(date_str)[:10])
+        st.session_state["jrn_slider"] = min(max(target, j_min), j_max)
+        st.session_state["jrn_playing"] = False  # a jump is a deliberate stop
+
+    with head[2]:
+        playing = st.session_state.get("jrn_playing", False)
+        btn = st.columns(2)
+        with btn[0]:
+            if st.button("⏸ Pause" if playing else "▶ Play", key="jrn_play",
+                         width="stretch", type="secondary" if playing else "primary"):
+                # At the end of the record, Play restarts rather than doing
+                # nothing -- a button that looks live and is inert reads as broken.
+                if not playing and st.session_state.get("jrn_slider", j_max) >= j_max:
+                    st.session_state["jrn_slider"] = j_min
+                st.session_state["jrn_playing"] = not playing
+                st.rerun()
+        with btn[1]:
+            if st.button("↺ Restart", key="jrn_restart", width="stretch"):
+                st.session_state["jrn_slider"] = j_min
+                st.session_state["jrn_playing"] = False
+                st.rerun()
+
+    step_days = JOURNEY_STEPS[jrn_speed]
+    is_playing = st.session_state.get("jrn_playing", False)
+
+    # The fragment is what makes playback affordable. A full script rerun every
+    # 0.4s would re-run the control row, the section radio and every query the
+    # page above owns; a fragment redraws only this panel.
+    @st.fragment(run_every=JOURNEY_TICK if is_playing else None)
+    def journey_panel() -> None:
+        # --- Every cursor write happens here, ABOVE the slider. ---
+        pending = st.session_state.pop("jrn_pending_jump", None)
+        if pending is not None:
+            st.session_state["jrn_slider"] = min(max(pending, j_min), j_max)
+
+        if st.session_state.get("jrn_playing"):
+            nxt = st.session_state.get("jrn_slider", j_min) + dt.timedelta(days=step_days)
+            if nxt >= j_max:
+                st.session_state["jrn_slider"] = j_max
+                st.session_state["jrn_playing"] = False
+                # scope="app" so the fragment is re-decorated WITHOUT run_every.
+                # A fragment-scoped rerun would leave the timer running against
+                # a cursor that can no longer move.
+                st.rerun(scope="app")
+            st.session_state["jrn_slider"] = nxt
+
+        cursor = st.slider(
+            "Journey cursor", min_value=j_min, max_value=j_max,
+            value=st.session_state.get("jrn_slider", j_max),
+            key="jrn_slider", format="MMM YYYY", label_visibility="collapsed",
+            help="Drag to travel through this company's history",
+        )
+        asof = cursor.isoformat()
+
+        snap = dal.journey_snapshot(jsym, asof)
+        path = dal.journey_price_path(jsym, JOURNEY_STRIDE)
+
+        if snap is None or path.empty:
+            ui.empty_state(
+                f"{jmeta['name']} has no sessions on or before {cursor:%b %d, %Y}.",
+                "Drag the cursor forward — this company listed later than the "
+                "start of the record.", kind="warn")
+            return
+
+        # --- Facts for THIS instant. Every one is a query against `asof`, so
+        # nothing on the panel can describe a moment the chart is not showing.
+        records = dal.journey_records(jsym, asof)
+        extremes = dal.journey_extremes(jsym, asof, limit=3)
+        up_runs = dal.journey_streaks(jsym, asof, direction=1, limit=1)
+        down_runs = dal.journey_streaks(jsym, asof, direction=-1, limit=1)
+        best_worst = dal.journey_best_worst(jsym, asof)
+        # The cursor is a query parameter on every one of these, never a filter
+        # applied to the result. An episode still open at the cursor must report
+        # a NULL recovery rather than one dated in the reader's future.
+        crashes = dal.journey_drawdowns(jsym, asof, min_depth=JOURNEY_MIN_DRAWDOWN)
+        trends = dal.journey_trend_changes(jsym, asof)
+        co_events = dal.journey_company_events(jsym, asof, sessions=JOURNEY_EVENT_SESSIONS)
+        mkt_events = dal.journey_market_events(
+            jsym, asof, sessions=JOURNEY_EVENT_SESSIONS, min_move=JOURNEY_MIN_MOVE)
+
+        moments = journey.timeline(
+            company_events=co_events, market_events=mkt_events,
+            drawdowns=crashes, extremes=extremes, asof=asof,
+        )
+
+        ui.journey_header(
+            cursor.strftime("%B %-d, %Y"), snap["close"],
+            journey.chapter_label(snap),
+            f"{ui.fmt_pct(snap['return_to_date'])} since {snap['first_date'][:4]}",
+            "up" if snap["return_to_date"] >= 0 else "down",
+        )
+
+        ui.kpi_cards([
+            {"icon": "📅", "label": "Into the journey",
+             "value": f"{snap['years_elapsed']:.1f} yrs",
+             "foot": f"{int(snap['sessions_elapsed']):,} sessions traded"},
+            {"icon": "📈", "label": "Compound annual return",
+             "value": ui.fmt_pct(snap["cagr_to_date"], 1),
+             "foot": "Annualized, from the first session in the record"},
+            {"icon": "🏔️", "label": "All-time high so far",
+             "value": ui.fmt_price(snap["peak_close"]),
+             "foot": "The highest close reached by this date"},
+            {"icon": "🕳️", "label": "Below that high",
+             "value": ui.fmt_pct(snap["drawdown"], 1),
+             "change_dir": "down" if snap["drawdown"] < -0.001 else "flat",
+             "foot": "Distance from the running record"},
+        ])
+
+        panes = st.columns([2.45, 1.0])
+        with panes[0]:
+            fig = charts.journey_path(path, pal, asof=asof, moments=moments,
+                                      log=st.session_state.get("jrn_log", True))
+            picked = ui.chart(
+                fig, key="jrn_path", config=PLOT_CONFIG, controls=False, select=True,
+                caption=("Solid is history travelled, faint is still ahead. Diamonds, "
+                         "circles and squares are events — hover one, or click "
+                         "anywhere on the line to travel there."),
+            )
+            # A click is stashed and applied on the NEXT fragment run, above the
+            # slider. Applying it here would write an already-instantiated
+            # widget's key, which Streamlit forbids.
+            if picked and picked.get("selection", {}).get("points"):
+                clicked = str(picked["selection"]["points"][0].get("x", ""))[:10]
+                if clicked and clicked != st.session_state.get("jrn_last_click"):
+                    st.session_state["jrn_last_click"] = clicked
+                    try:
+                        st.session_state["jrn_pending_jump"] = dt.date.fromisoformat(clicked)
+                        st.session_state["jrn_playing"] = False
+                        st.rerun(scope="fragment")
+                    except ValueError:
+                        pass  # a click on a non-date axis position; ignore
+
+            ui.chart(charts.journey_drawdown_band(path, pal, asof=asof),
+                     key="jrn_dd", config=PLOT_CONFIG, controls=False,
+                     caption="How far below its own record the company was, at every point so far.")
+
+        with panes[1]:
+            ui.section("Timeline", f"{len(moments)} moments so far")
+            with st.container(height=560):
+                ui.journey_timeline(moments, on_jump=jrn_jump, key_prefix="jrntl")
+
+        ui.section("Did you know?", f"What the record says about {jmeta['name']} by this date")
+        facts = journey.did_you_know(
+            name=str(jmeta["name"]), snapshot=snap, records=records, extremes=extremes,
+            up_streaks=up_runs, down_streaks=down_runs, best_worst=best_worst,
+            drawdowns=crashes, company_events=co_events, trend_changes=trends,
+        )
+        ui.did_you_know(facts, on_jump=jrn_jump, key_prefix="jrnfact")
+
+        ui.table_view(
+            "Timeline data",
+            pd.DataFrame([{
+                "Date": m.date, "Kind": m.kind, "Event": m.title,
+                # Scaled to percentage points here, like every other percent
+                # column in the app: the `%%` format string prints the number
+                # it is given, so a raw 0.0643 would render as "0.06%".
+                "Company move": None if m.move is None else m.move * 100,
+                "Source": m.source,
+            } for m in moments]),
+            column_config={"Company move": st.column_config.NumberColumn(
+                "Company move", format="%+.2f%%")},
+            footer=("Company events are curated and carry a source. Market events are "
+                    "kept only where this company itself moved at least "
+                    f"{JOURNEY_MIN_MOVE:.0%}. Milestones are computed from the price data."),
+        )
+
+    journey_panel()
+
+    ui.note(
+        "The journey is always the company's whole record, so the date filter above "
+        "does not apply here. Returns are price-only and exclude dividends, and the "
+        "first session shown is where this dataset begins — not the company's IPO, "
+        "which appears as a curated event where one is recorded."
+    )
 
 
 # ---------------------------------------------------------------------------
