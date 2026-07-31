@@ -284,7 +284,13 @@ def chart(fig, *, key: str, config: dict, caption: str = "", controls: bool = Tr
     elif caption:
         st.markdown(f'<div class="note">{esc(caption)}</div>', unsafe_allow_html=True)
 
-    st.plotly_chart(fig, width="stretch", config=config, key=f"{key}_{nonce}")
+    # `use_container_width`, NOT `width="stretch"` -- unlike st.dataframe and
+    # st.button, st.plotly_chart has no `width` parameter in Streamlit 1.50. It
+    # would land in **kwargs, which this widget forwards to Plotly, and surface
+    # on every chart in the app as "The keyword arguments have been deprecated
+    # ... use `config` instead". Revisit only after checking the signature:
+    # `inspect.signature(st.plotly_chart)`.
+    st.plotly_chart(fig, use_container_width=True, config=config, key=f"{key}_{nonce}")
 
 
 # ---------------------------------------------------------------------------
