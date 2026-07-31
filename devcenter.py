@@ -179,7 +179,7 @@ The two access patterns are genuinely different — *one symbol across time* and
         "WHERE name NOT LIKE 'sqlite_%' ORDER BY "
         "CASE type WHEN 'table' THEN 0 WHEN 'view' THEN 1 ELSE 2 END, name;"
     )
-    st.dataframe(schema, use_container_width=True, hide_index=True, height=320)
+    st.dataframe(schema, width="stretch", hide_index=True, height=320)
 
     st.markdown(
         """
@@ -228,6 +228,14 @@ def _sql_explorer(directory: pd.DataFrame, start: str, end: str) -> None:
                     params[p] = st.text_input("Window start", start, key="sql_start")
                 elif p == "end":
                     params[p] = st.text_input("Window end", end, key="sql_end")
+                elif p == "sessions":
+                    # A holding-period length in trading sessions (~252 a year),
+                    # not a date range -- see ROLLING_RETURNS.
+                    params[p] = st.selectbox(
+                        "Holding period", [252, 756, 1260, 2520], index=2,
+                        format_func=lambda n: f"{n} sessions (~{n // 252}Y)",
+                        key="sql_sessions",
+                    )
 
     try:
         df, ms = dal.timed_read(str(spec["sql"]), params)

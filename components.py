@@ -150,6 +150,55 @@ def note_md(text: str) -> None:
     st.caption(text)
 
 
+# `kind` -> (css modifier, default icon). Severity is carried by the icon and the
+# wording as well as the rule color, so it survives a reader who can't separate
+# the two hues.
+_EMPTY_KINDS = {
+    "empty": ("", "○"),
+    "warn": ("empty-warn", "⚠"),
+    "info": ("empty-info", "ℹ"),
+}
+
+
+def empty_state(message: str, hint: str = "", *, kind: str = "empty", icon: str = "") -> None:
+    """The one way this app says "there is nothing to show here".
+
+    Replaces raw `st.warning` / `st.info`, whose default panels are framework
+    chrome in colors the palette never validated. `hint` is where the recovery
+    goes: an empty state that only reports absence leaves the reader stuck, so
+    the second line says what to change (a longer window, a different symbol).
+    """
+    modifier, default_icon = _EMPTY_KINDS.get(kind, _EMPTY_KINDS["empty"])
+    hint_html = f'<div class="empty-hint">{esc(hint)}</div>' if hint else ""
+    st.markdown(
+        f'<div class="empty {modifier}">'
+        f'<span class="empty-ico">{esc(icon or default_icon)}</span>'
+        f'<div class="empty-body"><div class="empty-msg">{esc(message)}</div>'
+        f'{hint_html}</div></div>',
+        unsafe_allow_html=True,
+    )
+
+
+def table_view(label: str, df, *, column_config: dict | None = None,
+               height: int | None = None, footer: str = "",
+               hide_index: bool = True) -> None:
+    """A chart's underlying numbers, in a collapsed expander.
+
+    Every chart in this app is paired with one of these -- the table is the
+    accessible channel for readers who can't use the visual, and the fallback
+    when a value has to be read exactly rather than estimated off an axis.
+    Collapsed by default because it is the secondary reading; note that an
+    expander still EXECUTES its body when collapsed, so this takes an
+    already-computed frame and never a query.
+    """
+    with st.expander(label):
+        st.dataframe(df, width="stretch", hide_index=hide_index,
+                     column_config=column_config or {},
+                     **({"height": height} if height else {}))
+        if footer:
+            st.markdown(f'<div class="note">{esc(footer)}</div>', unsafe_allow_html=True)
+
+
 # ---------------------------------------------------------------------------
 # Cards
 # ---------------------------------------------------------------------------
@@ -228,14 +277,14 @@ def chart(fig, *, key: str, config: dict, caption: str = "", controls: bool = Tr
             if caption:
                 st.markdown(f'<div class="note">{esc(caption)}</div>', unsafe_allow_html=True)
         with right:
-            if st.button("↺ Reset view", key=f"__reset_{key}", use_container_width=True,
+            if st.button("↺ Reset view", key=f"__reset_{key}", width="stretch",
                          help="Restore the default zoom, pan and axis range"):
                 st.session_state[nonce_key] = nonce + 1
                 st.rerun()
     elif caption:
         st.markdown(f'<div class="note">{esc(caption)}</div>', unsafe_allow_html=True)
 
-    st.plotly_chart(fig, use_container_width=True, config=config, key=f"{key}_{nonce}")
+    st.plotly_chart(fig, width="stretch", config=config, key=f"{key}_{nonce}")
 
 
 # ---------------------------------------------------------------------------
@@ -321,7 +370,7 @@ def data_table(
     shown = view.iloc[lo:lo + per_page]
 
     st.dataframe(
-        shown, use_container_width=True, hide_index=True, height=height,
+        shown, width="stretch", hide_index=True, height=height,
         column_config=column_config or {},
     )
 
@@ -332,5 +381,5 @@ def data_table(
     with right:
         st.download_button(
             "⬇ Export CSV", data=view.to_csv(index=False), file_name=csv_name,
-            mime="text/csv", key=f"{key}_dl", use_container_width=True,
+            mime="text/csv", key=f"{key}_dl", width="stretch",
         )

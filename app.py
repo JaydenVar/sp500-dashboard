@@ -62,6 +62,16 @@ CUSTOM_PRESET = "Custom Range"
 # which is what makes reading across sections trustworthy.
 WINDOWED_SECTIONS = ("Overview", "Market", "Companies", "Risk", "Portfolio")
 
+# Rolling-return horizons, as SESSION counts (~252 trading days a year). A
+# holding-period length, not a date filter: it selects how long each period is,
+# while the record swept stays the symbol's full history.
+ROLLING_HORIZONS: dict[str, int] = {"1Y": 252, "3Y": 756, "5Y": 1260, "10Y": 2520}
+
+# Opening set for the correlation matrix: four names from four different sectors,
+# so the first render shows a range of coefficients rather than one cluster near
+# 1.0 that makes the chart look broken.
+CORR_DEFAULT = ("AAPL", "JPM", "XOM", "JNJ")
+
 
 def resolve_range(preset: str, min_d: dt.date, max_d: dt.date) -> tuple[dt.date, dt.date]:
     """Preset label (or bare sentinel) -> window, clamped to the available data.
@@ -245,7 +255,7 @@ if not DEV and section == "Overview":
     for i_e, ex in enumerate(ask.EXAMPLES):
         with ex_cols[i_e]:
             st.button(
-                ex, key=f"ask_ex_{i_e}", use_container_width=True,
+                ex, key=f"ask_ex_{i_e}", width="stretch",
                 on_click=use_example, args=(ex,),
             )
 
@@ -271,7 +281,9 @@ if not DEV and section == "Overview":
             answers.generated(asked, routed.df, pal, insight_text=said or "")
 
         else:
-            st.info(routed.error)
+            ui.empty_state(routed.error,
+                           "Try naming a company, a sector or a time period — "
+                           "or pick one of the suggestions above.", kind="info")
         st.divider()
 
     q = dal.quote(INDEX_SYMBOL)
@@ -279,7 +291,9 @@ if not DEV and section == "Overview":
     px = dal.prices(INDEX_SYMBOL, START, END)
 
     if ws is None or px.empty or q is None:
-        st.warning("No data in the selected window.")
+        ui.empty_state("No index data in the selected window.",
+                       "Widen the date range above — the shortest presets can fall "
+                       "entirely inside a market closure.", kind="warn")
     else:
         ui.quote_strip(
             "S&P 500 Index", INDEX_SYMBOL, q,
@@ -337,7 +351,9 @@ if not DEV and section == "Market":
     sectors = dal.sector_performance(START, END)
 
     if movers.empty:
-        st.warning("No symbols have data in this window.")
+        ui.empty_state("No symbols traded in this window.",
+                       "Widen the date range above to cover at least one session.",
+                       kind="warn")
     else:
         adv = int((movers["period_return"] > 0).sum())
         dec = int((movers["period_return"] < 0).sum())
@@ -434,7 +450,9 @@ if not DEV and section == "Companies":
     cpx = dal.prices(sym, cs, ce)
 
     if cq is None or cws is None or cpx.empty:
-        st.warning(f"No data for {sym} in this window.")
+        ui.empty_state(f"{sym} has no sessions in this window.",
+                       "This company may have listed after the window ends — try "
+                       "All Time to see its full history.", kind="warn")
     else:
         listed_note = ""
         if s_min > start_d:
@@ -444,21 +462,26 @@ if not DEV and section == "Companies":
             f"{meta['sector']} · {meta['industry']}{listed_note}", pal,
         )
 
+        # Return, CAGR, volatility and max drawdown lead: they are what a company
+        # is actually researched on, and the pair of them (a return and the ride
+        # it took) is the comparison the About page argues for. Max drawdown was
+        # previously a sub-line on the volatility card, which read as a footnote
+        # to volatility rather than as the peer metric it is.
         ui.kpi_cards([
             {"icon": "📅", "label": f"Return · {preset}", "value": ui.fmt_pct(cws["period_return"], 1),
              "change": f"{cws['trading_days']:,} sessions", "change_dir": "flat",
              "foot": f"{pd.to_datetime(cws['first_date']):%b %Y} → {pd.to_datetime(cws['last_date']):%b %Y}"},
             {"icon": "📈", "label": "CAGR", "value": ui.fmt_pct(cws["cagr"], 1),
              "foot": "Annualized over the window"},
-            {"icon": "🏔", "label": "Highest close", "value": ui.fmt_price(cws["highest_close"]),
-             "foot": f"Lowest {ui.fmt_price(cws['lowest_close'])}"},
+            {"icon": "〰", "label": "Volatility", "value": ui.fmt_pct(cws["ann_volatility"], 1, signed=False),
+             "foot": "Annualized, from daily returns"},
+            {"icon": "📉", "label": "Max drawdown", "value": ui.fmt_pct(cws["max_drawdown"], 1),
+             "change": "peak to trough", "change_dir": "down",
+             "foot": "Deepest fall from a running high"},
             {"icon": "🔁", "label": "52-week high", "value": ui.fmt_price(cq["w52_high"]),
              "foot": f"Low {ui.fmt_price(cq['w52_low'])} · trailing 1y"},
             {"icon": "🔊", "label": "Avg volume", "value": ui.fmt_compact(cws["avg_volume"]),
              "foot": f"{ui.fmt_dollar_compact(cws['avg_dollar_volume'])} avg turnover"},
-            {"icon": "〰", "label": "Volatility", "value": ui.fmt_pct(cws["ann_volatility"], 1, signed=False),
-             "change": ui.fmt_pct(cws["max_drawdown"], 0) + " max DD", "change_dir": "down",
-             "foot": "Annualized, from daily returns"},
         ])
         ui.note(
             "Market cap is intentionally absent: it needs share-count data that no "
@@ -468,78 +491,127 @@ if not DEV and section == "Companies":
         )
 
         ui.section("Price history", f"{sym} · {preset}")
+        # The window high/low used to be its own KPI card. It belongs beside the
+        # chart that shows it, and moving it there kept the metric row to the four
+        # figures a company is researched on plus two of context.
+        hi_lo = (f"Window high {ui.fmt_price(cws['highest_close'])} · "
+                 f"low {ui.fmt_price(cws['lowest_close'])}")
         if view_mode == "Candles":
-            ui.chart(charts.candlestick(cpx, pal), key="co_candle", config=PLOT_CONFIG)
+            ui.chart(charts.candlestick(cpx, pal), key="co_candle", config=PLOT_CONFIG,
+                     caption=hi_lo)
         else:
             fig_co = charts.price_line(cpx, pal, label=ui.fmt_price(cpx["close"].iloc[-1]))
             charts.add_events(fig_co, pal, events.in_range(cs, ce))
-            ui.chart(fig_co, key="co_price", config=PLOT_CONFIG)
+            ui.chart(fig_co, key="co_price", config=PLOT_CONFIG, caption=hi_lo)
 
-        ui.section("Moving averages", "Close with trailing 50- and 200-session means")
-        ma = dal.moving_averages(sym, cs, ce)
-        ui.chart(charts.moving_average_chart(ma, pal), key="co_ma", config=PLOT_CONFIG)
-        ui.note(
-            "A moving-average line only begins once its full window exists, so the "
-            "200-session average is absent for the first 200 sessions rather than "
-            "being averaged from fewer points than its label claims."
+        # Six charts used to render in sequence here, which buried the comparison
+        # below a scroll of secondary analysis. They are now one radio deep, for
+        # the same reason st.tabs is refused for section switching: only the
+        # selected view renders, so a visit runs one query instead of six and no
+        # Plotly figure is measured inside a hidden container. Nothing was
+        # removed -- every chart is still reachable, "Hide" is just the default.
+        detail = st.radio(
+            "More analysis",
+            ["Hide", "Moving averages", "Volume & daily returns",
+             "Growth & volatility", "Drawdown"],
+            horizontal=True, key="co_detail",
+            help="Deeper charts for this company, one at a time",
         )
 
-        left, right = st.columns(2)
-        with left:
-            ui.section("Trading volume")
-            ui.chart(charts.volume_bars(cpx, pal, height=240), key="co_vol", config=PLOT_CONFIG, controls=False)
-        with right:
-            ui.section("Daily returns")
-            dr = dal.daily_returns(sym, cs, ce)
-            ui.chart(charts.returns_bars(dr, pal, height=240), key="co_ret", config=PLOT_CONFIG, controls=False)
-
-        l2, r2 = st.columns(2)
-        with l2:
-            ui.section("Cumulative return", "Compounded from daily returns")
-            cr = dal.cumulative_return(sym, cs, ce)
-            if not cr.empty:
-                ui.chart(
-                    charts.area_series(cr, "cumulative_return", pal, color_key="blue",
-                                       y_title="Cumulative", height=280,
-                                       label=ui.fmt_pct(cr["cumulative_return"].iloc[-1], 0)),
-                    key="co_cum", config=PLOT_CONFIG, controls=False,
-                )
-        with r2:
-            ui.section("Rolling volatility", "21-session, annualized")
-            cv = dal.volatility(sym, cs, ce)
-            if not cv.empty:
-                ui.chart(
-                    charts.area_series(cv, "ann_volatility_21d", pal, color_key="red",
-                                       y_title="Ann. volatility", height=280,
-                                       label=ui.fmt_pct(cv["ann_volatility_21d"].iloc[-1], 0, signed=False),
-                                       zero_line=False),
-                    key="co_vola", config=PLOT_CONFIG, controls=False,
-                )
-
-        ui.section("Drawdown", "How far below its previous high the price sat")
-        cdd = dal.drawdowns(sym, cs, ce)
-        if not cdd.empty:
-            fig_dd = charts.area_series(cdd, "drawdown", pal, color_key="red",
-                                        y_title="Drawdown", height=300, tickformat=".0%")
-            worst_c = cdd.loc[cdd["drawdown"].idxmin()]
-            fig_dd.add_annotation(
-                x=worst_c["date"], y=worst_c["drawdown"],
-                text=f"{worst_c['drawdown'] * 100:.1f}% · {pd.to_datetime(worst_c['date']):%b %Y}",
-                showarrow=True, arrowhead=0, arrowcolor=pal["muted"], ax=0, ay=-26,
-                font=dict(color=pal["text_primary"], size=11.5),
+        if detail == "Moving averages":
+            ui.section("Moving averages", "Close with trailing 50- and 200-session means")
+            ma = dal.moving_averages(sym, cs, ce)
+            ui.chart(charts.moving_average_chart(ma, pal), key="co_ma", config=PLOT_CONFIG)
+            ui.note(
+                "A moving-average line only begins once its full window exists, so the "
+                "200-session average is absent for the first 200 sessions rather than "
+                "being averaged from fewer points than its label claims."
             )
-            charts.add_events(fig_dd, pal, events.in_range(cs, ce), label=False)
-            ui.chart(fig_dd, key="co_dd", config=PLOT_CONFIG, controls=False,
-                     caption="Measured from the running all-time high — the loss an investor sat through")
 
-        # ---- comparison ----
-        ui.section("Comparison", "Rebased to 100 at the window start — one shared axis")
-        default_cmp = [s for s in (sym, "MSFT", INDEX_SYMBOL) if s in set(directory["symbol"])]
+        elif detail == "Volume & daily returns":
+            left, right = st.columns(2)
+            with left:
+                ui.section("Trading volume")
+                ui.chart(charts.volume_bars(cpx, pal), key="co_vol", config=PLOT_CONFIG, controls=False)
+            with right:
+                ui.section("Daily returns")
+                dr = dal.daily_returns(sym, cs, ce)
+                ui.chart(charts.returns_bars(dr, pal), key="co_ret", config=PLOT_CONFIG, controls=False)
+
+        elif detail == "Growth & volatility":
+            l2, r2 = st.columns(2)
+            with l2:
+                ui.section("Cumulative return", "Compounded from daily returns")
+                cr = dal.cumulative_return(sym, cs, ce)
+                if not cr.empty:
+                    ui.chart(
+                        charts.area_series(cr, "cumulative_return", pal, color_key="blue",
+                                           y_title="Cumulative", height=charts.H_COMPACT,
+                                           label=ui.fmt_pct(cr["cumulative_return"].iloc[-1], 0)),
+                        key="co_cum", config=PLOT_CONFIG, controls=False,
+                    )
+            with r2:
+                ui.section("Rolling volatility", "21-session, annualized")
+                cv = dal.volatility(sym, cs, ce)
+                if not cv.empty:
+                    ui.chart(
+                        charts.area_series(cv, "ann_volatility_21d", pal, color_key="red",
+                                           y_title="Ann. volatility", height=charts.H_COMPACT,
+                                           label=ui.fmt_pct(cv["ann_volatility_21d"].iloc[-1], 0, signed=False),
+                                           zero_line=False),
+                        key="co_vola", config=PLOT_CONFIG, controls=False,
+                    )
+
+        elif detail == "Drawdown":
+            ui.section("Drawdown", "How far below its previous high the price sat")
+            cdd = dal.drawdowns(sym, cs, ce)
+            if not cdd.empty:
+                fig_dd = charts.area_series(cdd, "drawdown", pal, color_key="red",
+                                            y_title="Drawdown", height=charts.H_COMPACT, tickformat=".0%")
+                worst_c = cdd.loc[cdd["drawdown"].idxmin()]
+                fig_dd.add_annotation(
+                    x=worst_c["date"], y=worst_c["drawdown"],
+                    text=f"{worst_c['drawdown'] * 100:.1f}% · {pd.to_datetime(worst_c['date']):%b %Y}",
+                    showarrow=True, arrowhead=0, arrowcolor=pal["muted"], ax=0, ay=-26,
+                    font=dict(color=pal["text_primary"], size=11.5),
+                )
+                charts.add_events(fig_dd, pal, events.in_range(cs, ce), label=False)
+                ui.chart(fig_dd, key="co_dd", config=PLOT_CONFIG, controls=False,
+                         caption="Measured from the running all-time high — the loss an investor sat through")
+
+        # ---- peer comparison ----
+        ui.section("Peer comparison", "Rebased to 100 at the window start — one shared axis")
+
+        # Open on a real peer set: the same sector, ranked by the turnover already
+        # computed for the Market table (period_movers is cached, so this is a
+        # cache hit rather than a new query). The old default paired every company
+        # with MSFT, which is a peer for a handful of them and noise for the rest.
+        known = set(directory["symbol"])
+        pm = dal.period_movers(START, END)
+        same_sector = pm[(pm["sector"] == meta["sector"]) & (pm["symbol"] != sym)]
+        top_peers = list(
+            same_sector.sort_values("avg_dollar_volume", ascending=False)["symbol"].head(2)
+        )
+        peer_default = [sym] + (top_peers or [s for s in (INDEX_SYMBOL,) if s in known])
+
+        # Follow the selected company. A multiselect with a key keeps its value
+        # forever, so without this, switching from Apple to Exxon would leave the
+        # comparison showing Apple's peers -- stale in a way that reads as a bug.
+        # Writing a widget key is only forbidden AFTER the widget exists.
+        if st.session_state.get("co_last_sym") != sym:
+            st.session_state["co_last_sym"] = sym
+            st.session_state["cmp_syms"] = peer_default
+        # The limit used to be 8; a selection stored from then would exceed
+        # max_selections and raise on a session that survived a hot-update.
+        stored = st.session_state.get("cmp_syms")
+        if stored is not None and len(stored) > 3:
+            st.session_state["cmp_syms"] = list(stored)[:3]
+
         cmp_syms = st.multiselect(
-            "Compare symbols", options=list(directory["symbol"]),
-            default=st.session_state.get("cmp_syms", default_cmp[:3]),
-            key="cmp_syms", max_selections=8,
-            help="Up to 8. Each keeps its own color as the selection changes.",
+            "Compare with", options=list(directory["symbol"]),
+            default=peer_default, key="cmp_syms", max_selections=3,
+            help="Up to three. Defaults to the biggest companies in the same sector; "
+                 "add ^GSPC to compare against the index.",
         )
         cmp_metric = st.radio(
             "Compare on", ["Price (rebased)", "Cumulative return", "Drawdown",
@@ -566,7 +638,7 @@ if not DEV and section == "Companies":
                 ui.note("No data for that selection in this window.")
             else:
                 fig_m = charts.multi_series(
-                    frames, pal, value_col=col, y_title=title, height=400,
+                    frames, pal, value_col=col, y_title=title, height=charts.H_PRIMARY,
                     tickformat=tickfmt, zero_line=zline, hover_fmt=hoverfmt,
                 )
                 charts.add_events(fig_m, pal, events.in_range(START, END), label=False)
@@ -607,10 +679,14 @@ if not DEV and section == "Companies":
                     "Window return": (finals.values - 100.0),  # already indexed to 100 = whole percents
                     "First data": [pivot[c].first_valid_index().date() for c in finals.index],
                 })
-                st.dataframe(
-                    rows, use_container_width=True, hide_index=True,
+                ui.table_view(
+                    "Comparison — table view", rows,
                     column_config={
-                        "Window return": st.column_config.NumberColumn("Window return", format="%+.2f%%"),
+                        "Window return": st.column_config.NumberColumn(
+                            "Window return", format="%+.2f%%"),
+                        "Indexed (start=100)": st.column_config.NumberColumn(
+                            "Indexed (start=100)", format="%.1f",
+                            help="Every series starts at 100 on the window's first session"),
                     },
                 )
                 ui.note(
@@ -684,14 +760,61 @@ if not DEV and section == "Performance":
                 "years, so they are period returns, not calendar-year returns."
             )
 
+    # Rolling returns. Stays all-time like the rest of this section: the point is
+    # every holding period in the record, so narrowing to a window would discard
+    # the outcomes that make the spread worth showing.
+    ui.section("Rolling returns", "S&P 500 index · every holding period of a fixed length")
+    horizon = st.radio(
+        "Holding period", list(ROLLING_HORIZONS), key="perf_roll",
+        horizontal=True, label_visibility="collapsed",
+    )
+    roll_sessions = ROLLING_HORIZONS[horizon]
+    roll = dal.rolling_returns(INDEX_SYMBOL, roll_sessions)
+    rsum = dal.rolling_return_summary(INDEX_SYMBOL, roll_sessions)
+
+    if roll.empty or rsum is None:
+        ui.empty_state(f"The record is shorter than {horizon}.",
+                       "No complete holding period of that length exists yet — pick a "
+                       "shorter one.")
+    else:
+        ui.kpi_cards([
+            {"icon": "🟢", "label": "Ended positive",
+             "value": ui.fmt_pct(rsum["share_positive"], 0, signed=False),
+             "foot": f"of {int(rsum['periods']):,} {horizon} periods"},
+            {"icon": "🥇", "label": "Best", "value": ui.fmt_pct(rsum["best"], 1),
+             "change": f"to {pd.to_datetime(rsum['best_end_date']):%b %Y}", "change_dir": "up",
+             "foot": "Annualized, best end date"},
+            {"icon": "🥀", "label": "Worst", "value": ui.fmt_pct(rsum["worst"], 1),
+             "change": f"to {pd.to_datetime(rsum['worst_end_date']):%b %Y}", "change_dir": "down",
+             "foot": "Annualized, worst end date"},
+            {"icon": "🎯", "label": "Median", "value": ui.fmt_pct(rsum["median_return"], 1),
+             "foot": f"Typical {horizon} outcome"},
+        ])
+        fig_roll = charts.area_series(
+            roll, "annualized_return", pal, color_key="blue",
+            y_title=f"{horizon} annualized return", height=charts.H_PRIMARY, tickformat=".0%",
+        )
+        charts.add_events(fig_roll, pal, events.in_range(
+            roll["date"].iloc[0].date().isoformat(), END))
+        ui.chart(fig_roll, key="perf_rolling", config=PLOT_CONFIG,
+                 caption="Each point is the annualized return of the period ENDING that day")
+        ui.note(
+            f"Every {horizon} stretch in the record, not one window — the point plotted "
+            f"on a date is what an investor earned per year over the {horizon} ending "
+            "there. The spread between the best and worst bars is the real risk of the "
+            "horizon, which a single cumulative line hides completely. Returns are "
+            "annualized so the four horizons stay comparable, and overlapping periods "
+            "share most of their history, so neighbouring points are not independent."
+        )
+
     ui.section("Monthly seasonality", "S&P 500 index · month by year")
     m = dal.monthly(INDEX_SYMBOL)
     if not m.empty:
         piv = m.pivot(index="year", columns="month", values="month_return")
         piv = piv.reindex(columns=[f"{i:02d}" for i in range(1, 13)])
         ui.chart(charts.seasonality_heatmap(piv, pal, MONTHS), key="perf_season", config=PLOT_CONFIG, controls=False)
-        with st.expander("Monthly returns — table view"):
-            st.dataframe(piv.style.format("{:+.2%}", na_rep="—"), use_container_width=True)
+        ui.table_view("Monthly returns — table view",
+                      piv.style.format("{:+.2%}", na_rep="—"), hide_index=False)
 
 
 # ---------------------------------------------------------------------------
@@ -710,7 +833,9 @@ if not DEV and section == "Risk":
     rws = dal.window_stats(rsym, rs, END)
 
     if dd.empty or rws is None:
-        st.warning("No data in the selected window.")
+        ui.empty_state(f"{rsym} has no sessions in this window.",
+                       "Widen the date range above, or pick a company with a longer "
+                       "listed history.", kind="warn")
     else:
         worst = dd.loc[dd["drawdown"].idxmin()]
         cur = dd["drawdown"].iloc[-1]
@@ -732,7 +857,7 @@ if not DEV and section == "Risk":
 
         ui.section("Drawdown from running high", f"{rsym} · underwater curve")
         fig = charts.area_series(dd, "drawdown", pal, color_key="red",
-                                 y_title="Drawdown", height=340, tickformat=".0%")
+                                 y_title="Drawdown", height=charts.H_PRIMARY, tickformat=".0%")
         fig.add_annotation(
             x=worst["date"], y=worst["drawdown"],
             text=f"{worst['drawdown'] * 100:.1f}% · {pd.to_datetime(worst['date']):%b %Y}",
@@ -747,11 +872,85 @@ if not DEV and section == "Risk":
         if not vol.empty:
             ui.chart(
                 charts.area_series(vol, "ann_volatility_21d", pal, color_key="blue",
-                                   y_title="Ann. volatility", height=300,
+                                   y_title="Ann. volatility", height=charts.H_COMPACT,
                                    label=ui.fmt_pct(vol["ann_volatility_21d"].iloc[-1], 0, signed=False),
                                    zero_line=False),
                 key="risk_vol", config=PLOT_CONFIG, controls=False,
             )
+
+        ui.section("How these move together", f"Daily-return correlation · {preset}")
+        corr_syms = st.multiselect(
+            "Companies", list(directory["symbol"]),
+            default=[s for s in CORR_DEFAULT if s in set(directory["symbol"])],
+            key="risk_corr_syms", max_selections=8,
+            format_func=lambda s: f"{s} — {directory.loc[directory['symbol'] == s, 'name'].iloc[0]}",
+            help="Two to eight companies",
+        )
+
+        if len(corr_syms) < 2:
+            ui.empty_state("Pick at least two companies.",
+                           "Correlation describes a pair, so it needs two names "
+                           "to compare.")
+        else:
+            cm = dal.correlation_matrix(tuple(corr_syms), START, END)
+            cp = dal.correlation_pairs(tuple(corr_syms), START, END)
+            if cm.empty or cp.empty:
+                ui.empty_state("Those companies share no trading sessions in this window.",
+                               "Correlation needs days where every name traded — widen "
+                               "the window or drop the most recently listed company.",
+                               kind="warn")
+            else:
+                usable = cp.dropna(subset=["correlation"])
+                if not usable.empty:
+                    hi = usable.loc[usable["correlation"].idxmax()]
+                    lo = usable.loc[usable["correlation"].idxmin()]
+                    ui.kpi_cards([
+                        {"icon": "🔗", "label": "Most correlated",
+                         "value": f"{hi['sym_a']} · {hi['sym_b']}", "small": True,
+                         "change": f"{hi['correlation']:.2f}", "change_dir": "flat",
+                         "foot": "Moves most closely together"},
+                        {"icon": "🪢", "label": "Least correlated",
+                         "value": f"{lo['sym_a']} · {lo['sym_b']}", "small": True,
+                         "change": f"{lo['correlation']:.2f}", "change_dir": "flat",
+                         "foot": "The most diversifying pair here"},
+                        {"icon": "📐", "label": "Average pair",
+                         "value": f"{usable['correlation'].mean():.2f}",
+                         "foot": f"Across {len(usable)} pairs"},
+                        {"icon": "📆", "label": "Shared sessions",
+                         "value": f"{int(usable['n'].min()):,}",
+                         "foot": "Fewest for any pair in the window"},
+                    ])
+
+                ui.chart(charts.correlation_heatmap(cm, pal), key="risk_corr",
+                         config=PLOT_CONFIG, controls=False)
+                ui.note(
+                    "Correlation of DAILY RETURNS, not of prices: two rising price "
+                    "series correlate near 1.0 whatever they actually did, because "
+                    "both trend. 1.00 means the two moved in lockstep, 0.00 that they "
+                    "moved independently, negative that one tended to rise when the "
+                    "other fell — so the lower the number, the more a pair diversifies "
+                    "each other. Each pair uses only the sessions where both traded, "
+                    "so a company listed mid-window is measured over its own shorter "
+                    "overlap rather than dragging the rest down."
+                )
+                pairs_tbl = usable.assign(
+                    Pair=usable["sym_a"] + " · " + usable["sym_b"],
+                    Correlation=usable["correlation"].round(3),
+                    Sessions=usable["n"].astype(int),
+                )[["Pair", "Correlation", "Sessions"]].sort_values(
+                    "Correlation", ascending=False)
+                ui.table_view(
+                    "Correlation pairs — table view", pairs_tbl,
+                    column_config={
+                        "Correlation": st.column_config.NumberColumn(
+                            "Correlation", format="%.3f",
+                            help="1.00 moves in lockstep · 0.00 independent · "
+                                 "negative moves opposite"),
+                        "Sessions": st.column_config.NumberColumn(
+                            "Sessions", format="%d",
+                            help="Days both companies traded inside the window"),
+                    },
+                )
 
         ui.section("Risk vs return", "All symbols over their own full history")
         lb = dal.leaderboard()
@@ -768,7 +967,7 @@ if not DEV and section == "Risk":
                 customdata=scat[["name"]].values,
                 hovertemplate="<b>%{text}</b><br>Vol %{x:.1%} · CAGR %{y:.1%}<extra></extra>",
             ))
-            f = charts.style(f, pal, y_title="CAGR", height=440, crosshair=False,
+            f = charts.style(f, pal, y_title="CAGR", height=charts.H_TALL, crosshair=False,
                              y_tickformat=".0%")
             f.update_xaxes(title=dict(text="Annualized volatility",
                                       font=dict(color=pal["muted"], size=11.5)),
@@ -802,7 +1001,8 @@ if not DEV and section == "Portfolio":
     )
 
     if not holdings:
-        ui.note("Add at least one holding to run a simulation.")
+        ui.empty_state("No holdings selected.",
+                       "Pick up to eight companies above to build a basket.")
     else:
         st.markdown('<div class="note" style="margin-top:6px;">Weights (%)</div>',
                     unsafe_allow_html=True)
@@ -818,7 +1018,9 @@ if not DEV and section == "Portfolio":
 
         total_w = sum(raw_w.values())
         if total_w <= 0:
-            st.warning("Total weight must be greater than zero.")
+            ui.empty_state("Every holding is weighted zero.",
+                           "Give at least one holding a weight above 0% to run the "
+                           "simulation.", kind="warn")
         else:
             # Normalize so the basket always sums to 100%. Showing the raw total
             # keeps that honest rather than silently rescaling behind the reader.
@@ -833,10 +1035,10 @@ if not DEV and section == "Portfolio":
             pser = dal.portfolio_series(weights, START, END)
 
             if stats is None or pser.empty:
-                st.warning(
-                    "Not enough overlapping history for that combination in this "
-                    "window. Try a longer range or different holdings."
-                )
+                ui.empty_state(
+                    "Not enough overlapping history for that combination.",
+                    "The basket needs sessions where every holding traded. Widen the "
+                    "window, or drop the most recently listed holding.", kind="warn")
             else:
                 bench = dal.window_stats(INDEX_SYMBOL, START, END)
                 bench_ret = bench["period_return"] if bench is not None else None
@@ -866,22 +1068,98 @@ if not DEV and section == "Portfolio":
                            f"Invested {pd.to_datetime(stats['first_date']):%b %d, %Y}")
                 fig_pf = charts.area_series(
                     pser, "cumulative_return", pal, color_key="blue",
-                    y_title="Cumulative return", height=340,
+                    y_title="Cumulative return", height=charts.H_PRIMARY,
                     label=ui.fmt_pct(pser["cumulative_return"].iloc[-1], 0),
                 )
                 charts.add_events(fig_pf, pal, events.in_range(stats["first_date"], END))
                 ui.chart(fig_pf, key="pf_growth", config=PLOT_CONFIG)
 
+                # Benchmark on ONE shared axis (never a second y-scale). Both series
+                # are percentages from the same starting session, so they are directly
+                # comparable: the index window starts at the portfolio's first RETURN
+                # date, not its investable date, so neither series is a session ahead.
+                ui.section("Portfolio vs. the S&P 500", f"Both from {pd.to_datetime(pser['date'].iloc[0]):%b %d, %Y}")
+                bench_start = pser["date"].iloc[0].date().isoformat()
+                bench_ser = dal.cumulative_return(INDEX_SYMBOL, bench_start, END)
+                if bench_ser.empty:
+                    ui.empty_state("No index history overlaps this portfolio's window.",
+                                   "The benchmark comparison needs index sessions "
+                                   "inside the basket's own date range.", kind="warn")
+                else:
+                    ui.chart(
+                        charts.multi_series(
+                            {"Portfolio": pser.rename(columns={"cumulative_return": "v"}),
+                             "S&P 500": bench_ser.rename(columns={"cumulative_return": "v"})},
+                            pal, value_col="v", y_title="Cumulative return",
+                            height=charts.H_PRIMARY, tickformat=".0%", zero_line=True, hover_fmt=".1%",
+                        ),
+                        key="pf_vs_bench", config=PLOT_CONFIG, controls=False,
+                    )
+                    lead = stats["total_return"] - bench_ser["cumulative_return"].iloc[-1]
+                    ui.note(
+                        f"The basket finished {abs(lead) * 100:.1f} points "
+                        f"{'ahead of' if lead >= 0 else 'behind'} the index over this "
+                        "period. Both lines start at 0% on the same session and share "
+                        "one axis — the comparison is only honest if they do. The index "
+                        "is price-only here, as the portfolio is: neither includes "
+                        "dividends, so both are understated by a similar order."
+                    )
+
+                ui.section("Allocation", "What the basket is made of")
+                alloc_col, contrib_col = st.columns([1, 1.35])
                 mix = pd.DataFrame({
-                    "Ticker": [s for s, _ in weights],
-                    "Company": [name_of.get(s, s) for s, _ in weights],
-                    "Weight": [w * 100 for _, w in weights],
+                    "symbol": [s for s, _ in weights],
+                    "name": [name_of.get(s, s) for s, _ in weights],
+                    "weight": [w for _, w in weights],
                 })
-                st.dataframe(
-                    mix, use_container_width=True, hide_index=True,
-                    column_config={"Weight": st.column_config.NumberColumn(
-                        "Weight", format="%.1f%%")},
-                )
+                with alloc_col:
+                    ui.chart(charts.allocation_donut(mix, pal), key="pf_alloc",
+                             config=PLOT_CONFIG, controls=False)
+
+                contrib = dal.portfolio_contribution(weights, START, END)
+                with contrib_col:
+                    if contrib.empty:
+                        ui.empty_state("No contribution data for this basket.",
+                                       "This needs at least one full session after the "
+                                       "investment date.", kind="warn")
+                    else:
+                        ui.chart(charts.contribution_bars(contrib, pal), key="pf_contrib",
+                                 config=PLOT_CONFIG, controls=False)
+
+                if not contrib.empty:
+                    ui.note(
+                        "Left: how the money is split. Right: how much of the "
+                        "portfolio's total return each holding actually produced, in "
+                        "percentage points. These are NOT weight x return — once "
+                        "returns compound, the parts of that product do not sum to the "
+                        "whole. Each bar is the holding's weighted daily return scaled "
+                        "by the portfolio's value going into that session, which does "
+                        "sum to the total exactly. A big weight on a mediocre performer "
+                        "and a small weight on a great one can produce the same bar; "
+                        "hover to see which."
+                    )
+                    contrib_tbl = contrib.assign(
+                        Ticker=contrib["symbol"], Company=contrib["name"],
+                        Weight=contrib["weight"] * 100,
+                        Return=contrib["holding_return"] * 100,
+                        Contribution=contrib["contribution"] * 100,
+                    )[["Ticker", "Company", "Weight", "Return", "Contribution"]]
+                    ui.table_view(
+                        "Contribution by holding — table view", contrib_tbl,
+                        column_config={
+                            "Weight": st.column_config.NumberColumn("Weight", format="%.1f%%"),
+                            "Return": st.column_config.NumberColumn(
+                                "Holding return", format="%+.1f%%",
+                                help="The holding's own compounded return over the "
+                                     "sessions the portfolio was invested"),
+                            "Contribution": st.column_config.NumberColumn(
+                                "Contribution", format="%+.2f%%",
+                                help="Points of the portfolio's total return; these sum "
+                                     "to the total"),
+                        },
+                        footer=(f"Sums to {contrib['contribution'].sum() * 100:+.2f}% · "
+                                f"portfolio total {stats['total_return'] * 100:+.2f}%"),
+                    )
 
                 ui.note_md(
                     "**How this is modelled.** The portfolio is rebalanced back to "

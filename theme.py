@@ -454,6 +454,26 @@ label[data-testid="stWidgetLabel"] p {{
   border-radius: var(--radius); padding: 6px; box-shadow: var(--shadow);
 }}
 
+/* ---------- empty / notice states ----------
+   Streamlit's st.warning and st.info draw their own yellow and blue panels,
+   which ignore the validated palette and read as framework chrome dropped into
+   a product. These carry the same information in the app's own surface, with
+   the accent as a left rule so severity still has a non-color channel (the icon
+   and the wording) rather than resting on the hue alone. */
+.empty {{
+  display: flex; gap: 11px; align-items: flex-start;
+  background: var(--surface); border: 1px solid var(--border);
+  border-left: 3px solid var(--muted);
+  border-radius: var(--radius); padding: 13px 15px;
+  margin: 8px 0 4px; box-shadow: var(--shadow);
+}}
+.empty-ico {{ font-size: 1rem; line-height: 1.35; flex: 0 0 auto; }}
+.empty-body {{ min-width: 0; }}
+.empty-msg {{ font-size: 0.83rem; font-weight: 560; color: var(--text-1); line-height: 1.45; }}
+.empty-hint {{ font-size: 0.75rem; color: var(--muted); line-height: 1.5; margin-top: 3px; }}
+.empty-warn {{ border-left-color: var(--down); }}
+.empty-info {{ border-left-color: var(--accent); }}
+
 /* ---------- skeleton (only for genuinely absent content) ---------- */
 .skel {{
   background: linear-gradient(90deg, var(--surface-2) 25%, var(--border) 50%, var(--surface-2) 75%);

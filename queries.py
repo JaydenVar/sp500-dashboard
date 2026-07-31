@@ -705,3 +705,298 @@ WHERE is_index = 0
 ORDER BY {order_by}
 LIMIT :limit;
 """
+
+
+# --------------------------------------------------------------------------
+# Rolling returns — every holding period of a fixed length, not one window
+# --------------------------------------------------------------------------
+# A single window return answers "what did it do since 2015?", which is one
+# draw from one starting date. Rolling returns answer the question an investor
+# actually has: "if I had bought at ANY point and held N years, what range of
+# outcomes would I have seen?" The spread between the best and worst bar is the
+# real risk of the horizon, and it is invisible in a single cumulative line.
+#
+# The lookback is a SESSION count, not a date offset: markets don't trade every
+# calendar day, so a 365-day offset lands on a holiday or weekend for a large
+# share of rows and silently drops them. Pairing row N with row N-:sessions is
+# exact. `LAG` would read more naturally but SQLite requires a literal offset,
+# and the horizon is chosen at runtime — hence the self-join on ROW_NUMBER.
+ROLLING_RETURNS = """
+WITH s AS (
+    SELECT date, close, ROW_NUMBER() OVER (ORDER BY date) AS rn
+    FROM prices
+    WHERE symbol = :symbol AND close IS NOT NULL AND close > 0
+)
+SELECT
+    a.date,
+    b.date AS start_date,
+    a.close / b.close - 1 AS window_return,
+    -- Annualized so horizons are comparable: a 10-year total return and a
+    -- 1-year total return are not the same unit and must not share an axis.
+    POWER(a.close / b.close, 252.0 / :sessions) - 1 AS annualized_return
+FROM s a
+JOIN s b ON b.rn = a.rn - :sessions
+ORDER BY a.date;
+"""
+
+# The distribution behind the line above. Computed in SQL rather than from the
+# returned frame, so the summary and the chart cannot drift apart and neither is
+# a Python-side calculation.
+ROLLING_RETURN_SUMMARY = """
+WITH s AS (
+    SELECT date, close, ROW_NUMBER() OVER (ORDER BY date) AS rn
+    FROM prices
+    WHERE symbol = :symbol AND close IS NOT NULL AND close > 0
+),
+roll AS (
+    SELECT a.date,
+           POWER(a.close / b.close, 252.0 / :sessions) - 1 AS ann_return
+    FROM s a
+    JOIN s b ON b.rn = a.rn - :sessions
+)
+SELECT
+    COUNT(*) AS periods,
+    MIN(ann_return) AS worst,
+    MAX(ann_return) AS best,
+    AVG(ann_return) AS mean_return,
+    MEDIAN(ann_return) AS median_return,
+    -- Share of holding periods that finished above water. The single most
+    -- useful figure here: it turns "stocks go up over time" into a number.
+    AVG(CASE WHEN ann_return > 0 THEN 1.0 ELSE 0.0 END) AS share_positive,
+    (SELECT date FROM roll ORDER BY ann_return ASC  LIMIT 1) AS worst_end_date,
+    (SELECT date FROM roll ORDER BY ann_return DESC LIMIT 1) AS best_end_date
+FROM roll;
+"""
+
+
+# --------------------------------------------------------------------------
+# Correlation matrix — how a set of names move together
+# --------------------------------------------------------------------------
+# Pearson correlation of DAILY RETURNS, not of prices. Two rising price series
+# correlate near 1.0 whatever they actually did, because both trend; returns are
+# what a diversification claim rests on.
+#
+# Expanded from the covariance identity so it runs as one grouped pass:
+#     r = (n*Sxy - Sx*Sy) / (sqrt(n*Sxx - Sx^2) * sqrt(n*Syy - Sy^2))
+# The self-join on `date` is what enforces pairwise-complete observations — a
+# session where either name did not trade is absent from that pair's sums, so a
+# mid-window listing narrows its own pairs rather than corrupting every cell.
+#
+# `{symbol_rows}` is a format slot: the VALUES list is built in data_access from
+# symbols validated against the universe, never interpolated from user text.
+CORRELATION_MATRIX = """
+WITH picks(symbol) AS (VALUES {symbol_rows}),
+r AS (
+    SELECT d.symbol, d.date, d.daily_return
+    FROM daily_returns d
+    JOIN picks k ON k.symbol = d.symbol
+    WHERE d.date BETWEEN :start AND :end
+      AND d.daily_return IS NOT NULL
+),
+pairs AS (
+    SELECT
+        a.symbol AS sym_a,
+        b.symbol AS sym_b,
+        COUNT(*)                                   AS n,
+        SUM(a.daily_return)                        AS sx,
+        SUM(b.daily_return)                        AS sy,
+        SUM(a.daily_return * b.daily_return)       AS sxy,
+        SUM(a.daily_return * a.daily_return)       AS sxx,
+        SUM(b.daily_return * b.daily_return)       AS syy
+    FROM r a
+    JOIN r b ON b.date = a.date
+    GROUP BY a.symbol, b.symbol
+)
+SELECT
+    sym_a, sym_b, n,
+    -- Clamped to [-1, 1]. The expanded identity is algebraically incapable of
+    -- leaving that range, but in floating point a symbol against ITSELF returns
+    -- 1.0000000000000002, and a coefficient above 1.0 on screen reads as a bug
+    -- in the statistic rather than as the last bit of a double.
+    CASE WHEN n < 3 THEN NULL ELSE
+        MAX(-1.0, MIN(1.0,
+            (n * sxy - sx * sy) / NULLIF(
+                SQRT(MAX(n * sxx - sx * sx, 0.0)) * SQRT(MAX(n * syy - sy * sy, 0.0)), 0.0)))
+    END AS correlation
+FROM pairs
+ORDER BY sym_a, sym_b;
+"""
+
+
+# --------------------------------------------------------------------------
+# Return contribution — which holding actually produced the portfolio's return
+# --------------------------------------------------------------------------
+# Weight x holding-return is the intuitive answer and it is wrong: the parts do
+# not sum to the whole once returns compound. The exact decomposition for a
+# daily-rebalanced portfolio falls out of the wealth recursion:
+#
+#     W_T - 1 = SUM_t W_{t-1} * pr_t              (telescoping the compounding)
+#             = SUM_t W_{t-1} * SUM_i w_i r_it
+#             = SUM_i [ SUM_t w_i * r_it * W_{t-1} ]   <- one term per holding
+#
+# So a holding's contribution is its weighted daily return scaled by the
+# portfolio's wealth going INTO that session. These terms sum to the portfolio's
+# total return exactly, which `tests_portfolio.py` asserts to 1e-9.
+#
+# `w_begin` is the wealth *before* the session — the frame therefore ends one row
+# early (`1 PRECEDING`), and the first session's COALESCE supplies the opening
+# wealth of 1.0 that an empty window frame returns as NULL.
+PORTFOLIO_CONTRIBUTION = """
+WITH picks(symbol, weight) AS (VALUES {weight_rows}),
+priced AS (
+    SELECT p.date
+    FROM prices p JOIN picks k ON k.symbol = p.symbol
+    WHERE p.date BETWEEN :start AND :end AND p.close IS NOT NULL
+    GROUP BY p.date
+    HAVING COUNT(DISTINCT p.symbol) = (SELECT COUNT(*) FROM picks)
+),
+invested AS (SELECT MIN(date) AS d0 FROM priced),
+port AS (
+    SELECT d.date, SUM(d.daily_return * k.weight) AS pr
+    FROM daily_returns d
+    JOIN picks k ON k.symbol = d.symbol
+    JOIN priced p ON p.date = d.date
+    WHERE d.date > (SELECT d0 FROM invested)
+      AND d.daily_return IS NOT NULL
+    GROUP BY d.date
+    HAVING COUNT(*) = (SELECT COUNT(*) FROM picks)
+),
+wealth AS (
+    SELECT date,
+           EXP(COALESCE(
+               SUM(LN(1 + pr)) OVER (ORDER BY date
+                                     ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING),
+               0.0)) AS w_begin
+    FROM port
+)
+SELECT
+    k.symbol,
+    s.name,
+    s.sector,
+    k.weight,
+    SUM(d.daily_return * k.weight * w.w_begin) AS contribution,
+    -- The holding's own compounded return over exactly the sessions the
+    -- portfolio was invested, so the two columns describe the same period.
+    EXP(SUM(LN(1 + d.daily_return))) - 1 AS holding_return,
+    COUNT(*) AS sessions
+FROM daily_returns d
+JOIN picks k   ON k.symbol = d.symbol
+JOIN wealth w  ON w.date = d.date
+JOIN symbols s ON s.symbol = k.symbol
+WHERE d.daily_return IS NOT NULL
+GROUP BY k.symbol, s.name, s.sector, k.weight
+ORDER BY contribution DESC;
+"""
+
+
+# --------------------------------------------------------------------------
+# Explorer entries for the queries defined above
+# --------------------------------------------------------------------------
+# Registered here rather than inside the EXPLORER literal because these
+# statements are defined further down the file than the registry is. The
+# alternative -- hoisting four long queries above it -- would put the SQL in
+# an order that has nothing to do with how it reads.
+EXPLORER.update({
+    "Every holding period of a fixed length": {
+        "question": "If I had bought at any point and held five years, what would I have earned?",
+        "sql": ROLLING_RETURNS,
+        "params": ["symbol", "sessions"],
+        "read_path": "Indexed scan + self-join",
+        "read_path_note": "Row-numbered, paired N sessions apart",
+        "indexes": ["idx_prices_symbol_date (symbol, date)"],
+        "objects": ["prices"],
+        "powers": [
+            "Performance → Rolling returns chart",
+            "Performance → Ended-positive / best / worst / median cards",
+        ],
+        "explain": (
+            "**What it does.** Returns the annualized return of *every* holding period "
+            "of a chosen length in the record — roughly 3,800 overlapping ten-year "
+            "periods, not one.\n\n"
+            "**Why it exists.** A single cumulative line answers \"what did it do since "
+            "2015?\", which is one draw from one starting date, and starting dates are "
+            "the thing an investor does not control. The spread between the best and "
+            "worst period is the real risk of the horizon, and it is completely "
+            "invisible in a cumulative chart.\n\n"
+            "**How it works.** `ROW_NUMBER()` numbers the sessions and the table joins "
+            "to itself paired N rows apart. The lookback is a **session** count, not a "
+            "date offset: markets don't trade every calendar day, so a 365-day offset "
+            "lands on a weekend or holiday for a large share of rows and silently drops "
+            "them. `LAG` would read more naturally but SQLite requires a literal offset "
+            "and the horizon is picked at runtime.\n\n"
+            "**The honesty check.** Returns are annualized so the four horizons share an "
+            "axis, and the UI states that overlapping periods share most of their "
+            "history — neighbouring points are not independent observations."
+        ),
+    },
+    "How closely two companies move together": {
+        "question": "Which of these companies actually diversify each other?",
+        # Pre-filled with a representative set. The live query builds its
+        # VALUES list from the user's selection, but the Explorer executes
+        # what it displays, and an unfilled `{symbol_rows}` slot is not
+        # valid SQL -- so the showcased statement is a real, runnable one.
+        "sql": CORRELATION_MATRIX.format(
+            symbol_rows="('AAPL'), ('JPM'), ('XOM'), ('JNJ')"),
+        "params": ["start", "end"],
+        "read_path": "View + pairwise self-join",
+        "read_path_note": "One grouped pass over the pairs",
+        "indexes": ["idx_prices_symbol_date (symbol, date)"],
+        "objects": ["daily_returns (view)", "prices"],
+        "powers": [
+            "Risk → Correlation matrix",
+            "Risk → Most / least correlated pair cards",
+        ],
+        "explain": (
+            "**What it does.** Pearson correlation between every pair in a chosen set, "
+            "over the selected window.\n\n"
+            "**Why it is returns and not prices.** Two rising price series correlate "
+            "near 1.0 whatever they actually did, because both trend. Correlation of "
+            "*daily returns* is what a diversification claim rests on — it asks whether "
+            "they move together day to day, not whether both went up over a decade.\n\n"
+            "**How it works.** Expanded from the covariance identity — "
+            "`r = (n*Sxy - Sx*Sy) / (sqrt(n*Sxx - Sx^2) * sqrt(n*Syy - Sy^2))` — so the "
+            "whole matrix is one grouped pass instead of a query per pair. The result "
+            "is clamped to [-1, 1]: the algebra cannot leave that range, but in floating "
+            "point a symbol against itself returns 1.0000000000000002, and a coefficient "
+            "above 1.0 on screen reads as a broken statistic.\n\n"
+            "**The honesty check.** The self-join on `date` enforces pairwise-complete "
+            "observations, so a company listed mid-window is measured over its own "
+            "shorter overlap rather than corrupting every other cell. Below three shared "
+            "sessions the coefficient is NULL, not a fabricated 1.0 from a two-point fit."
+        ),
+    },
+    "Which holding actually produced the return": {
+        "question": "My portfolio returned 40% — where did that come from?",
+        # Pre-filled with an equal-weighted four-name basket, for the same
+        # reason as the correlation entry above.
+        "sql": PORTFOLIO_CONTRIBUTION.format(
+            weight_rows="('AAPL', 0.25), ('MSFT', 0.25), ('JPM', 0.25), ('XOM', 0.25)"),
+        "params": ["start", "end"],
+        "read_path": "View + window functions",
+        "read_path_note": "Wealth recursion, then grouped per holding",
+        "indexes": ["idx_prices_symbol_date (symbol, date)"],
+        "objects": ["daily_returns (view)", "prices", "symbols"],
+        "powers": [
+            "Portfolio → Return contribution chart",
+            "Portfolio → Contribution table and its sum check",
+        ],
+        "explain": (
+            "**What it does.** Splits the portfolio's total return into one figure per "
+            "holding, in percentage points.\n\n"
+            "**Why the obvious answer is wrong.** Weight x holding-return is what most "
+            "people reach for, and the parts do not sum to the whole — once returns "
+            "compound, the gap grows with the window. On a 25-year basket it misses by "
+            "more than the total return itself.\n\n"
+            "**How it works.** The exact decomposition falls out of the wealth "
+            "recursion: `W_T - 1 = SUM_t W_{t-1} * pr_t`, and since `pr_t` is itself a "
+            "weighted sum across holdings, the order of summation swaps to give one "
+            "term per holding. So a holding's contribution is its weighted daily return "
+            "scaled by the portfolio's wealth going *into* that session. `w_begin` uses "
+            "a window frame ending `1 PRECEDING`, with a COALESCE supplying the opening "
+            "wealth of 1.0 that an empty frame returns as NULL.\n\n"
+            "**The honesty check.** These terms sum to the portfolio's total return "
+            "exactly; `tests_portfolio.py` asserts it to 1e-9 across five baskets, and "
+            "the UI prints the sum beside the total so a reader can check it too."
+        ),
+    },
+})

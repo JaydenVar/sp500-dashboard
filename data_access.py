@@ -213,6 +213,68 @@ def leaderboard_ranked(*, sort: str = "cagr", ascending: bool = False,
     return _read(sql, {"sector": sector, "limit": int(limit)})
 
 
+@st.cache_data(ttl=TTL, show_spinner=False)
+def rolling_returns(symbol: str, sessions: int) -> pd.DataFrame:
+    """Annualized return of every `sessions`-long holding period, in date order."""
+    return _dated(_read(queries.ROLLING_RETURNS,
+                        {"symbol": symbol, "sessions": int(sessions)}))
+
+
+@st.cache_data(ttl=TTL, show_spinner=False)
+def rolling_return_summary(symbol: str, sessions: int) -> pd.Series | None:
+    df = _read(queries.ROLLING_RETURN_SUMMARY,
+               {"symbol": symbol, "sessions": int(sessions)})
+    return None if df.empty or not df.iloc[0]["periods"] else df.iloc[0]
+
+
+def _symbol_rows(symbols: tuple[str, ...]) -> str:
+    """Build the VALUES list for a multi-symbol query.
+
+    Same rule as `_weight_rows`: symbols reach this from a multiselect, but a
+    value spliced into SQL is validated against the universe regardless.
+    """
+    from universe import all_symbols
+
+    known = set(all_symbols())
+    for sym in symbols:
+        if sym not in known:
+            raise ValueError(f"unknown symbol: {sym!r}")
+    return ", ".join(f"('{sym}')" for sym in symbols)
+
+
+@st.cache_data(ttl=TTL, show_spinner=False)
+def correlation_matrix(symbols: tuple[str, ...], start: str, end: str) -> pd.DataFrame:
+    """Pairwise daily-return correlation, pivoted into a square matrix.
+
+    The pivot is a reshape of the query's rows, not a calculation — every
+    coefficient is computed in SQL. Rows and columns are returned in the
+    caller's order so a symbol keeps its position when the selection grows.
+    """
+    if len(symbols) < 2:
+        return pd.DataFrame()
+    sql = queries.CORRELATION_MATRIX.format(symbol_rows=_symbol_rows(symbols))
+    df = _read(sql, {"start": start, "end": end})
+    if df.empty:
+        return pd.DataFrame()
+    matrix = df.pivot(index="sym_a", columns="sym_b", values="correlation")
+    ordered = [s for s in symbols if s in matrix.index and s in matrix.columns]
+    return matrix.loc[ordered, ordered]
+
+
+@st.cache_data(ttl=TTL, show_spinner=False)
+def correlation_pairs(symbols: tuple[str, ...], start: str, end: str) -> pd.DataFrame:
+    """The same query's rows as a long list, with self-pairs and mirrors dropped.
+
+    Feeds the table view and the most/least-correlated callouts, where the
+    square matrix's duplicate halves would double-count every pair.
+    """
+    if len(symbols) < 2:
+        return pd.DataFrame()
+    sql = queries.CORRELATION_MATRIX.format(symbol_rows=_symbol_rows(symbols))
+    df = _read(sql, {"start": start, "end": end})
+    return df[df["sym_a"] < df["sym_b"]].reset_index(drop=True) if not df.empty else df
+
+
 def _weight_rows(weights: tuple[tuple[str, float], ...]) -> str:
     """Build the VALUES list for a portfolio query.
 
@@ -242,6 +304,18 @@ def portfolio_stats(weights: tuple[tuple[str, float], ...], start: str, end: str
     sql = queries.PORTFOLIO_STATS.format(weight_rows=_weight_rows(weights))
     df = _read(sql, {"start": start, "end": end})
     return None if df.empty or pd.isna(df.iloc[0]["sessions"]) else df.iloc[0]
+
+
+@st.cache_data(ttl=TTL, show_spinner=False)
+def portfolio_contribution(weights: tuple[tuple[str, float], ...],
+                           start: str, end: str) -> pd.DataFrame:
+    """Per-holding contribution to the portfolio's total return.
+
+    The contributions sum to the portfolio's total return exactly; see the
+    derivation above `PORTFOLIO_CONTRIBUTION` in queries.py.
+    """
+    sql = queries.PORTFOLIO_CONTRIBUTION.format(weight_rows=_weight_rows(weights))
+    return _read(sql, {"start": start, "end": end})
 
 
 @st.cache_data(ttl=TTL, show_spinner=False)

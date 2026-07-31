@@ -27,6 +27,18 @@ PLOT_CONFIG = {
     "toImageButtonOptions": {"format": "png", "scale": 2, "filename": "chart"},
 }
 
+# Chart heights, as a four-step scale rather than a number chosen per call site.
+# Every builder's default is one of these, so charts sitting side by side or
+# stacked down a page align instead of missing each other by 20px. The step
+# encodes the chart's ROLE, which is why they are named for it:
+#
+#   STRIP   a companion band under a primary chart (volume beneath price)
+#   COMPACT a secondary reading — one series, no legend
+#   PRIMARY the chart a section exists to show
+#   TALL    needs vertical room to stay legible: a matrix, a scatter of ~49
+#           labelled points, a category axis with a dozen rows
+H_STRIP, H_COMPACT, H_PRIMARY, H_TALL = 150, 300, 380, 460
+
 
 def add_events(fig: go.Figure, pal: dict, evts, *, y_domain: tuple[float, float] = (0, 1),
                label: bool = True) -> go.Figure:
@@ -173,7 +185,7 @@ def end_label(fig: go.Figure, x, y, text: str, pal: dict) -> None:
 # Builders
 # ---------------------------------------------------------------------------
 def price_line(df, pal: dict, *, log: bool = False, label: str | None = None,
-               height: int = 380, color: str | None = None) -> go.Figure:
+               height: int = H_PRIMARY, color: str | None = None) -> go.Figure:
     color = color or pal["series"][0]
     fig = go.Figure()
     fig.add_trace(go.Scatter(
@@ -195,7 +207,7 @@ def price_line(df, pal: dict, *, log: bool = False, label: str | None = None,
     return fig
 
 
-def candlestick(df, pal: dict, *, height: int = 380) -> go.Figure:
+def candlestick(df, pal: dict, *, height: int = H_PRIMARY) -> go.Figure:
     fig = go.Figure(go.Candlestick(
         x=df["date"], open=df["open"], high=df["high"], low=df["low"], close=df["close"],
         increasing=dict(line=dict(color=pal["up"], width=1), fillcolor=pal["up"]),
@@ -207,7 +219,7 @@ def candlestick(df, pal: dict, *, height: int = 380) -> go.Figure:
     return fig
 
 
-def volume_bars(df, pal: dict, *, height: int = 150) -> go.Figure:
+def volume_bars(df, pal: dict, *, height: int = H_STRIP) -> go.Figure:
     fig = go.Figure(go.Bar(
         x=df["date"], y=df["volume"], name="Volume",
         marker_color=pal["series"][0], marker_line_width=0, opacity=0.75,
@@ -216,7 +228,7 @@ def volume_bars(df, pal: dict, *, height: int = 150) -> go.Figure:
     return style(fig, pal, y_title="Volume", height=height)
 
 
-def moving_average_chart(df, pal: dict, *, height: int = 380) -> go.Figure:
+def moving_average_chart(df, pal: dict, *, height: int = H_PRIMARY) -> go.Figure:
     """Close with 50/200-session means. Three series -> legend is mandatory."""
     fig = go.Figure()
     fig.add_trace(go.Scatter(
@@ -252,7 +264,7 @@ def comparison_needs_log(pivot, threshold: float = 20.0) -> bool:
     return float(finals.max() / finals.min()) > threshold
 
 
-def indexed_comparison(pivot, pal: dict, *, height: int = 420, log: bool = False) -> go.Figure:
+def indexed_comparison(pivot, pal: dict, *, height: int = H_PRIMARY, log: bool = False) -> go.Figure:
     """Multiple symbols rebased to 100 -- ONE axis, never a second y-scale.
 
     Series take categorical slots in fixed order so a symbol keeps its color when
@@ -273,7 +285,7 @@ def indexed_comparison(pivot, pal: dict, *, height: int = 420, log: bool = False
     return fig
 
 
-def returns_bars(df, pal: dict, *, height: int = 260) -> go.Figure:
+def returns_bars(df, pal: dict, *, height: int = H_COMPACT) -> go.Figure:
     """Daily returns, colored by sign -- diverging polarity, not identity."""
     colors = [pal["up"] if v >= 0 else pal["down"] for v in df["daily_return"]]
     fig = go.Figure(go.Bar(
@@ -285,7 +297,7 @@ def returns_bars(df, pal: dict, *, height: int = 260) -> go.Figure:
 
 
 def area_series(df, value_col, pal: dict, *, color_key: str = "blue", y_title: str = "",
-                height: int = 300, tickformat: str = ".0%", label: str | None = None,
+                height: int = H_COMPACT, tickformat: str = ".0%", label: str | None = None,
                 zero_line: bool = True) -> go.Figure:
     color = pal[color_key] if color_key in pal else color_key
     fig = go.Figure()
@@ -301,7 +313,7 @@ def area_series(df, value_col, pal: dict, *, color_key: str = "blue", y_title: s
     return fig
 
 
-def yearly_return_bars(y, pal: dict, *, height: int = 340) -> go.Figure:
+def yearly_return_bars(y, pal: dict, *, height: int = H_PRIMARY) -> go.Figure:
     """Calendar-year returns. Partial years are faded and asterisked, because a
     part-year figure is not a calendar-year return."""
     colors = [pal["up"] if v >= 0 else pal["down"] for v in y["year_return"]]
@@ -320,7 +332,7 @@ def yearly_return_bars(y, pal: dict, *, height: int = 340) -> go.Figure:
     return fig
 
 
-def seasonality_heatmap(pivot, pal: dict, month_names, *, height: int = 460) -> go.Figure:
+def seasonality_heatmap(pivot, pal: dict, month_names, *, height: int = H_TALL) -> go.Figure:
     """Diverging heatmap: two opposite hues with a NEUTRAL midpoint (never a hue
     at zero), symmetric range so equal magnitudes read equally either side."""
     vmax = float(pivot.abs().max().max() or 0.01)
@@ -341,7 +353,7 @@ def seasonality_heatmap(pivot, pal: dict, month_names, *, height: int = 460) -> 
     return fig
 
 
-def sector_bars(df, pal: dict, *, height: int = 340) -> go.Figure:
+def sector_bars(df, pal: dict, *, height: int = H_TALL) -> go.Figure:
     """Median member return per sector. Median rather than mean because a mean of
     long-window total returns is dominated by a single outlier."""
     d = df.sort_values("median_return")
@@ -367,8 +379,105 @@ def sector_bars(df, pal: dict, *, height: int = 340) -> go.Figure:
     return fig
 
 
+def correlation_heatmap(matrix, pal: dict, *, height: int = H_TALL) -> go.Figure:
+    """Pairwise correlation as a diverging heatmap on a FIXED -1..1 scale.
+
+    Fixed rather than data-driven, unlike the seasonality map: correlation has
+    absolute meaning, and rescaling to the observed range would paint a set of
+    names that all move together (0.6-0.8) in the same dramatic spread as a
+    genuinely diversified one. The midpoint is neutral, never a hue, so zero
+    reads as zero.
+
+    Coefficients are printed in every cell — the color is the pattern, the text
+    is the value, and the reading never depends on judging a shade.
+    """
+    z = matrix.values
+    fig = go.Figure(go.Heatmap(
+        z=z, x=list(matrix.columns), y=list(matrix.index),
+        colorscale=[[0.0, pal["red"]], [0.5, pal["neutral_mid"]], [1.0, pal["blue"]]],
+        zmid=0, zmin=-1, zmax=1, xgap=2, ygap=2,
+        text=[[("—" if v != v else f"{v:.2f}") for v in row] for row in z],
+        texttemplate="%{text}",
+        textfont=dict(size=11),
+        hovertemplate="<b>%{z:.2f}</b><extra>%{y} vs %{x}</extra>",
+        colorbar=dict(
+            title=dict(text="Correlation", font=dict(color=pal["muted"], size=11)),
+            tickformat=".1f", outlinewidth=0, thickness=11,
+            tickvals=[-1, -0.5, 0, 0.5, 1],
+            tickfont=dict(color=pal["muted"], size=10.5),
+        ),
+    ))
+    fig = style(fig, pal, height=height, crosshair=False)
+    fig.update_yaxes(autorange="reversed", showgrid=False,
+                     tickfont=dict(color=pal["text_secondary"], size=11.5))
+    fig.update_xaxes(showline=False, side="top",
+                     tickfont=dict(color=pal["text_secondary"], size=11.5))
+    return fig
+
+
+def allocation_donut(df, pal: dict, *, label_col: str = "symbol",
+                     value_col: str = "weight", height: int = H_PRIMARY) -> go.Figure:
+    """Portfolio weights as a donut.
+
+    A pie is the one place a part-to-whole chart earns its keep — the weights
+    are a composition that sums to exactly 100% by construction. It stays
+    readable because the basket is capped at 8 holdings; beyond roughly that
+    many slices, angle comparison fails and this should become a bar chart.
+
+    Every slice carries its ticker and percent as text, so the legend and the
+    hue are reinforcement rather than the only way to identify a holding.
+    """
+    d = df.sort_values(value_col, ascending=False)
+    colors = [pal["series"][i % len(pal["series"])] for i in range(len(d))]
+    fig = go.Figure(go.Pie(
+        labels=d[label_col].astype(str), values=d[value_col],
+        hole=0.58, sort=False, direction="clockwise",
+        marker=dict(colors=colors, line=dict(color=pal["surface"], width=2)),
+        texttemplate="%{label}<br>%{percent:.1%}",
+        textposition="outside",
+        textfont=dict(color=pal["text_primary"], size=11),
+        hovertemplate="<b>%{label}</b><br>%{percent:.1%} of the basket<extra></extra>",
+    ))
+    fig = style(fig, pal, height=height, crosshair=False)
+    fig.update_layout(margin=dict(l=8, r=8, t=28, b=28))
+    return fig
+
+
+def contribution_bars(df, pal: dict, *, height: int = H_PRIMARY) -> go.Figure:
+    """Per-holding contribution to the portfolio's total return, in points.
+
+    Direction carries both a color and a signed value label, and the bars are
+    ordered by contribution so the reading order is the ranking. Hover adds the
+    holding's own return and weight, which is what explains a bar: a large
+    weight on a mediocre performer and a small weight on a great one can
+    contribute the same amount, and only the hover distinguishes them.
+    """
+    d = df.dropna(subset=["contribution"]).sort_values("contribution")
+    colors = [pal["up"] if v >= 0 else pal["down"] for v in d["contribution"]]
+    fig = go.Figure(go.Bar(
+        x=d["contribution"], y=d["symbol"].astype(str), orientation="h",
+        marker_color=colors, marker_line_width=0,
+        text=[f"{v:+.1%}" for v in d["contribution"]], textposition="outside",
+        textfont=dict(color=pal["text_primary"], size=11), cliponaxis=False,
+        customdata=d[["name", "weight", "holding_return"]].values,
+        hovertemplate=(
+            "<b>%{x:+.1%}</b> of the portfolio's return<br>"
+            "weight %{customdata[1]:.1%} · the holding itself returned "
+            "%{customdata[2]:+.1%}"
+            "<extra>%{customdata[0]}</extra>"
+        ),
+        name="Contribution",
+    ))
+    fig = style(fig, pal, height=height, crosshair=False)
+    fig.update_xaxes(tickformat=".0%", showgrid=True, gridcolor=pal["gridline"],
+                     showline=False)
+    fig.update_yaxes(showgrid=False, tickfont=dict(color=pal["text_secondary"], size=11.5))
+    fig.add_vline(x=0, line_color=pal["baseline"], line_width=1)
+    return fig
+
+
 def multi_series(frames: dict, pal: dict, *, value_col: str, y_title: str,
-                 height: int = 400, tickformat: str | None = None,
+                 height: int = H_PRIMARY, tickformat: str | None = None,
                  zero_line: bool = False, hover_fmt: str = ",.2f") -> go.Figure:
     """Overlay one metric across several symbols on ONE shared axis.
 
@@ -392,7 +501,7 @@ def multi_series(frames: dict, pal: dict, *, value_col: str, y_title: str,
 
 
 def generic_bars(df, pal: dict, *, label_col: str, value_col: str,
-                 height: int = 340, tickformat: str | None = None) -> go.Figure:
+                 height: int = H_PRIMARY, tickformat: str | None = None) -> go.Figure:
     """Horizontal bars for a result set whose shape isn't known ahead of time.
 
     Used only by the generated-SQL path, where the columns come back from a query
