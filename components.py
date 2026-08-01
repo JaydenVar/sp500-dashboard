@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import datetime as dt
 import html
+import urllib.parse
 import zoneinfo
 
 import pandas as pd
@@ -104,16 +105,84 @@ def market_status(now: dt.datetime | None = None) -> tuple[bool, str]:
     return False, f"After hours · closed 16:00 ET{approx}"
 
 
-def header(title: str, subtitle: str, data_through: dt.date, n_symbols: int) -> None:
+# ---------------------------------------------------------------------------
+# Brand
+# ---------------------------------------------------------------------------
+def brandmark(size: int = 38, *, uid: str = "hdr", cls: str = "hdr-mark") -> str:
+    """The MarketLens mark, as inline SVG.
+
+    **One glyph carrying both halves of the name.** The white path is a five-point
+    line that reads simultaneously as the letter **M** (two apexes over a valley,
+    legs falling to the baseline) and as a price chart making a higher high; the
+    filled dot sits on that higher apex as the focal point, and the ring behind
+    it is the lens barrel. The tile carries the brand gradient, which is the one
+    place the two brand colors appear together.
+
+    Inline rather than an asset file for two reasons: it inherits nothing from
+    the network (Streamlit Cloud serves no static directory by default, so an
+    <img> would need a data URI anyway), and it stays crisp at any DPI.
+
+    `uid` namespaces the gradient's element id. SVG ids are DOCUMENT-global, so
+    two marks on one page with the same id would both resolve to whichever
+    <defs> the browser parsed first -- fine today, a silent mis-paint the moment
+    a second mark is drawn with different colors.
+    """
+    gid = f"ml-grad-{uid}"
+    # The stops carry the brand as `style`, NOT as a stop-color presentation
+    # attribute: `var()` is a CSS value function, and browsers disagree about
+    # whether it resolves inside a presentation attribute. In `style` it is a
+    # plain declaration and always does -- which is what keeps the mark following
+    # the Light/Dark palette without this function needing the palette dict.
+    return (
+        f'<svg class="{esc(cls)}" width="{size}" height="{size}" viewBox="0 0 40 40" '
+        f'role="img" aria-label="MarketLens" xmlns="http://www.w3.org/2000/svg">'
+        f'<defs><linearGradient id="{gid}" x1="0" y1="0" x2="1" y2="1">'
+        f'<stop offset="0" style="stop-color: var(--brand)"/>'
+        f'<stop offset="1" style="stop-color: var(--brand-2)"/>'
+        f'</linearGradient></defs>'
+        f'<rect width="40" height="40" rx="11" fill="url(#{gid})"/>'
+        # The lens barrel, sitting behind the path.
+        f'<circle cx="20" cy="20" r="12.6" fill="none" stroke="#fff" '
+        f'stroke-opacity="0.3" stroke-width="1.4"/>'
+        # M / market path: up, dip, higher up, down.
+        f'<path d="M10 26.4 L15.4 15.2 L20 20.6 L24.6 12.4 L30 26.4" fill="none" '
+        f'stroke="#fff" stroke-width="2.7" stroke-linecap="round" '
+        f'stroke-linejoin="round"/>'
+        # The focus, on the higher apex.
+        f'<circle cx="24.6" cy="12.4" r="2.9" fill="#fff"/>'
+        f'</svg>'
+    )
+
+
+def wordmark(name: str, split: tuple[str, str]) -> str:
+    """The wordmark: first half in primary ink, second half in the brand gradient.
+
+    `split` comes from `theme.BRAND_SPLIT` rather than being sliced here, so the
+    two halves are a property of the brand and not of this renderer.
+    """
+    head, tail = split
+    if head + tail != name:  # a caller passed a name the split doesn't compose
+        return f'<div class="hdr-title">{esc(name)}</div>'
+    return f'<div class="hdr-title">{esc(head)}<b>{esc(tail)}</b></div>'
+
+
+def header(title: str, subtitle: str, data_through: dt.date, n_symbols: int,
+           *, split: tuple[str, str] | None = None) -> None:
+    """The product masthead: brandmark, wordmark, and the session's own facts.
+
+    One bar rather than a title over a subtitle: a platform header is furniture
+    a reader stops reading after the first visit, so it should cost one row.
+    """
     is_open, label = market_status()
     dot = "dot-open" if is_open else "dot-closed"
+    mark = wordmark(title, split) if split else f'<div class="hdr-title">{esc(title)}</div>'
     st.markdown(
         f"""
 <div class="hdr">
   <div class="hdr-left">
-    <div class="hdr-mark">📈</div>
+    {brandmark(38)}
     <div>
-      <div class="hdr-title">{esc(title)}</div>
+      {mark}
       <div class="hdr-sub">{esc(subtitle)}</div>
     </div>
   </div>
@@ -128,6 +197,25 @@ def header(title: str, subtitle: str, data_through: dt.date, n_symbols: int) -> 
 """,
         unsafe_allow_html=True,
     )
+
+
+def greeting(now: dt.datetime | None = None) -> str:
+    """"Good morning" / "Good afternoon" / "Good evening", in exchange-local time.
+
+    **Deliberately carries no name.** The app knows a browser session, not a
+    person; a greeting that guesses at a name is worse than one that doesn't try,
+    and there is nowhere honest to get one from. Exchange-local rather than the
+    reader's own clock because everything else on the page is stated in ET, and
+    a header saying "Good evening" beside a market that is still open would be
+    the app disagreeing with itself.
+    """
+    now = now or dt.datetime.now(MARKET_TZ)
+    if now.tzinfo is None:  # same defensive step as market_status()
+        now = now.replace(tzinfo=MARKET_TZ)
+    hour = now.astimezone(MARKET_TZ).hour
+    if hour < 12:
+        return "Good morning"
+    return "Good afternoon" if hour < 18 else "Good evening"
 
 
 def section(title: str, sub: str = "") -> None:
@@ -307,13 +395,130 @@ def table_view(label: str, df, *, column_config: dict | None = None,
 
 
 # ---------------------------------------------------------------------------
+# Sparklines
+#
+# A sparkline is a SHAPE, not an instrument. It has no axes, no hover, no zoom
+# and no reset button, so it is inline SVG rather than a Plotly figure: four of
+# these on the landing page would otherwise be four more figures for Streamlit to
+# serialize and Plotly to measure, to say something a ~200-byte path says.
+#
+# They are drawn from a column the page ALREADY queried. Nothing here computes a
+# statistic -- min, max and the endpoints are used only to map values onto a
+# viewBox, which is projection, not analysis.
+# ---------------------------------------------------------------------------
+SPARK_W = 96
+SPARK_H = 26
+# A ~96px-wide shape cannot resolve more marks than this, and a 25-year daily
+# record is ~6,300 points -- which would be a 60KB path in the page source for a
+# curve indistinguishable from one drawn with 120. Thinning is a rendering
+# decision, not an analytical one: it never changes which series is drawn.
+SPARK_MAX_POINTS = 120
+
+
+def _spark_points(values, w: float, h: float, pad: float = 2.0) -> list[tuple[float, float]]:
+    """Values -> (x, y) in SVG space, with y inverted and a flat series centred.
+
+    A constant series has zero span, and dividing by it would be a NaN in every
+    coordinate; it is drawn as a centred straight line instead, which is what a
+    flat series actually looks like.
+    """
+    lo, hi = min(values), max(values)
+    span = hi - lo
+    inner = h - 2 * pad
+    step = w / (len(values) - 1) if len(values) > 1 else 0.0
+    if span <= 0:
+        return [(i * step, h / 2) for i in range(len(values))]
+    return [(i * step, pad + inner * (1 - (v - lo) / span)) for i, v in enumerate(values)]
+
+
+def sparkline(values, *, color: str, w: int = SPARK_W, h: int = SPARK_H,
+              fill: bool = True, width: float = 1.6, uid: str = "s") -> str:
+    """A closing-price path as inline SVG. Returns "" when there is nothing to draw.
+
+    Returns markup rather than rendering, so a caller can put it inside a card,
+    a table cell, or -- as the pick chips do -- a data URI on a CSS background.
+    """
+    series = [float(v) for v in values
+              if v is not None and not (isinstance(v, float) and v != v)]
+    if len(series) < 2:
+        return ""
+    if len(series) > SPARK_MAX_POINTS:
+        # Stride, but always keep the LAST point: the endpoint dot marks the
+        # latest close, and a stride that dropped it would put the dot on a
+        # session the number beside it is not describing.
+        step = len(series) / SPARK_MAX_POINTS
+        idx = sorted({int(i * step) for i in range(SPARK_MAX_POINTS)} | {len(series) - 1})
+        series = [series[i] for i in idx]
+
+    pts = _spark_points(series, w - 1, h)
+    path = "M" + " L".join(f"{x:.1f} {y:.1f}" for x, y in pts)
+    gid = f"ml-spark-{uid}"
+
+    area = ""
+    if fill:
+        area = (
+            f'<defs><linearGradient id="{gid}" x1="0" y1="0" x2="0" y2="1">'
+            f'<stop offset="0" style="stop-color: {esc(color)}; stop-opacity: .28"/>'
+            f'<stop offset="1" style="stop-color: {esc(color)}; stop-opacity: 0"/>'
+            f'</linearGradient></defs>'
+            f'<path d="{path} L{pts[-1][0]:.1f} {h} L0 {h} Z" fill="url(#{gid})"/>'
+        )
+
+    return (
+        f'<svg class="spark" width="{w}" height="{h}" viewBox="0 0 {w} {h}" '
+        f'preserveAspectRatio="none" aria-hidden="true" '
+        f'xmlns="http://www.w3.org/2000/svg">{area}'
+        f'<path d="{path}" fill="none" stroke="{esc(color)}" stroke-width="{width}" '
+        f'stroke-linecap="round" stroke-linejoin="round"/>'
+        f'<circle cx="{pts[-1][0]:.1f}" cy="{pts[-1][1]:.1f}" r="{width + .5:.1f}" '
+        f'fill="{esc(color)}"/></svg>'
+    )
+
+
+def spark_color(values, pal: dict) -> str:
+    """Green when the series ended above where it started, red below, muted flat.
+
+    The direction is the series' own first-to-last move -- the same convention
+    the rest of the app uses for a return -- so the color is never a judgement
+    this function made up.
+    """
+    series = [float(v) for v in values
+              if v is not None and not (isinstance(v, float) and v != v)]
+    if len(series) < 2 or series[0] == 0:
+        return pal["muted"]
+    if series[-1] > series[0]:
+        return pal["up"]
+    return pal["down"] if series[-1] < series[0] else pal["muted"]
+
+
+def sparkline_uri(values, *, color: str, w: int = SPARK_W, h: int = SPARK_H,
+                  uid: str = "s") -> str:
+    """The same sparkline as a `url(...)` value for a CSS background-image.
+
+    This is how the pick chips get a sparkline: a Streamlit button's label is
+    markdown text and cannot hold an <svg>, so the shape is painted behind the
+    label instead. Percent-encoded rather than base64 -- the SVG stays readable
+    in devtools and the encoding costs fewer bytes at this size.
+    """
+    svg = sparkline(values, color=color, w=w, h=h, uid=uid)
+    if not svg:
+        return ""
+    encoded = urllib.parse.quote(svg, safe="")
+    return f"url(\"data:image/svg+xml,{encoded}\")"
+
+
+# ---------------------------------------------------------------------------
 # Cards
 # ---------------------------------------------------------------------------
 def kpi_cards(cards: list[dict]) -> None:
-    """cards: [{icon, label, value, small?, change?, change_dir?, foot?}]
+    """cards: [{icon, label, value, small?, change?, change_dir?, foot?, spark?}]
 
     `change_dir` is 'up' | 'down' | 'flat' and is passed explicitly rather than
     inferred from sign, because for drawdown/volatility a bigger number is worse.
+
+    `spark` is pre-rendered markup from `sparkline()` and is trusted as such --
+    every other field on the card is escaped. It goes last in the card because it
+    is context for the number above it, never the reading itself.
     """
     out = ['<div class="kpi-grid">']
     for c in cards:
@@ -323,12 +528,13 @@ def kpi_cards(cards: list[dict]) -> None:
             arrow = {"up": "▲", "down": "▼", "flat": "•"}[d]
             chg = f'<div class="chg chg-{d}">{arrow} {esc(c["change"])}</div>'
         foot = f'<div class="kpi-foot">{esc(c["foot"])}</div>' if c.get("foot") else ""
+        spark = f'<div class="kpi-spark">{c["spark"]}</div>' if c.get("spark") else ""
         out.append(
             f'<div class="kpi">'
             f'<div class="kpi-top"><span class="kpi-ico">{c.get("icon", "")}</span>'
             f'<span class="kpi-label">{esc(c["label"])}</span></div>'
             f'<div class="kpi-val{" sm" if c.get("small") else ""}">{esc(c["value"])}</div>'
-            f'{chg}{foot}</div>'
+            f'{chg}{foot}{spark}</div>'
         )
     out.append("</div>")
     st.markdown("".join(out), unsafe_allow_html=True)

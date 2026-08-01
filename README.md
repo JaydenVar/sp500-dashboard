@@ -1,4 +1,4 @@
-# Market Analytics — a SQL-first equity platform
+# MarketLens — a SQL-first equity platform
 
 25 years of daily history for the S&P 500 index and 49 large-cap US equities.
 **Every figure on screen is the output of a SQL query** — the analysis lives in

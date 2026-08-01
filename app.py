@@ -1,4 +1,4 @@
-"""Market Analytics — a SQL-first equity platform.
+"""MarketLens — a SQL-first equity platform.
 
 Two deliberately separate experiences share this entry point:
 
@@ -36,12 +36,17 @@ import markets
 import research
 import riskfolio
 from pagectx import Ctx
-from theme import PALETTES, app_css
+from theme import BRAND_NAME, BRAND_SPLIT, BRAND_TAGLINE, PALETTES, app_css
 from universe import INDEX_SYMBOL
 
+# The tab icon stays an emoji rather than the SVG brandmark: `page_icon` takes an
+# emoji or something PIL can open, and SVG is neither -- committing a PNG just to
+# theme a favicon would put a binary artifact in a repository whose entire visual
+# layer is otherwise generated. The mark itself is inline SVG in the app bar,
+# which is where a reader actually looks.
 st.set_page_config(
-    page_title="Market Analytics — SQL Dashboard",
-    page_icon="📈",
+    page_title=f"{BRAND_NAME} — Equity Research & Intelligence",
+    page_icon="🔷",
     layout="wide",
     initial_sidebar_state="collapsed",
 )
@@ -182,12 +187,7 @@ directory = dal.directory()
 equities = directory[directory["is_index"] == 0].reset_index(drop=True)
 last_date = dal.global_last_date()
 
-ui.header(
-    "Market Analytics",
-    "S&P 500 index and large-cap equities · 25 years of daily history, analyzed in SQL",
-    last_date,
-    len(directory),
-)
+ui.header(BRAND_NAME, BRAND_TAGLINE, last_date, len(directory), split=BRAND_SPLIT)
 
 # ---------------------------------------------------------------------------
 # Navigation — the page radio comes FIRST, because what the control row shows

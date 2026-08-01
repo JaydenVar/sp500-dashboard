@@ -72,6 +72,11 @@ DEFAULT_SPAN = "1Y"
 # the cards shrinking to the point where the company name is unreadable.
 N_PICKS = 4
 
+# Sessions behind each pick's sparkline: one trading quarter. Short enough that
+# the shape is about the move the score is describing, long enough that a single
+# session cannot define it.
+PICK_SPARK_SESSIONS = 60
+
 # Stock Journey playback. `JOURNEY_STEPS` is calendar days advanced per tick --
 # a journey is 25 years long, so a step of one session would take 40 minutes to
 # play through and nobody would watch it.
@@ -159,10 +164,16 @@ def _history_core(ctx: Ctx, sym: str) -> None:
     # Return, CAGR, volatility and max drawdown lead: they are what a company
     # is actually researched on, and the pair of them (a return and the ride
     # it took) is the comparison the About page argues for.
+    # The sparkline goes on the RETURN card and nowhere else in this row: it is
+    # the path the return card's own number summarizes, so it adds the shape of
+    # the ride without repeating a figure. On CAGR or volatility the same curve
+    # would be decoration attached to a statistic it does not depict.
+    closes = cpx["close"].tolist()
     ui.kpi_cards([
         {"icon": "📅", "label": f"Return · {preset}", "value": ui.fmt_pct(cws["period_return"], 1),
          "change": f"{cws['trading_days']:,} sessions", "change_dir": "flat",
-         "foot": f"{pd.to_datetime(cws['first_date']):%b %Y} → {pd.to_datetime(cws['last_date']):%b %Y}"},
+         "foot": f"{pd.to_datetime(cws['first_date']):%b %Y} → {pd.to_datetime(cws['last_date']):%b %Y}",
+         "spark": ui.sparkline(closes, color=ui.spark_color(closes, pal), uid=f"co{sym}")},
         {"icon": "📈", "label": "CAGR", "value": ui.fmt_pct(cws["cagr"], 1),
          "foot": "Annualized over the window"},
         {"icon": "〰", "label": "Volatility", "value": ui.fmt_pct(cws["ann_volatility"], 1, signed=False),
@@ -679,12 +690,15 @@ def _history_ranked(ctx: Ctx, sym: str, version: str) -> None:
                        kind="warn")
         return
 
+    rk_closes = hist["close"].tolist()
     ui.kpi_cards([
         {"icon": "📅", "label": f"Return · {preset}",
          "value": ui.fmt_pct(stats["period_return"], 1),
          "change": f"{stats['trading_days']:,} sessions", "change_dir": "flat",
          "foot": f"{pd.to_datetime(stats['first_date']):%b %Y} → "
-                 f"{pd.to_datetime(stats['last_date']):%b %Y}"},
+                 f"{pd.to_datetime(stats['last_date']):%b %Y}",
+         "spark": ui.sparkline(rk_closes, color=ui.spark_color(rk_closes, pal),
+                               uid=f"rk{sym}")},
         {"icon": "📈", "label": "CAGR", "value": ui.fmt_pct(stats["cagr"], 1),
          "foot": "Annualized over the window"},
         {"icon": "〰", "label": "Volatility",
@@ -1155,6 +1169,20 @@ def _ask_answer(ctx: Ctx, asked: str) -> None:
     st.divider()
 
 
+def _pick_name(full: str, limit: int = 22) -> str:
+    """A company name short enough to sit on the chip's second line.
+
+    Truncated on a word boundary where one is available, because a hard cut mid
+    word ("Internation…") reads as a rendering fault rather than as an
+    abbreviation. The full name is still in the chip's tooltip.
+    """
+    name = " ".join(str(full).split())
+    if len(name) <= limit:
+        return name
+    cut = name[:limit].rsplit(" ", 1)[0]
+    return (cut if len(cut) >= limit * 0.6 else name[:limit]).rstrip(" ,.") + "…"
+
+
 def _opportunities(ctx: Ctx, version: str) -> None:
     """Today's Opportunities: the ranking engine's board, on the front page.
 
@@ -1162,32 +1190,49 @@ def _opportunities(ctx: Ctx, version: str) -> None:
     than inheriting the Intelligence page's filters, so the landing page says the
     same thing on every visit. Each chip loads that company into the panel below.
 
-    ONE ROW, deliberately. This began as four cards with a button under each --
-    about 250px of the first screen, which pushed the searched company's own
-    panel out of view. The engine still has to be visible without scrolling, so
-    the strip stayed and shrank: symbol, score, and the company name on hover.
+    STILL ONE ROW. This began as four cards with a button under each -- about
+    250px of the first screen, which pushed the searched company's own panel out
+    of view -- and was collapsed to a row of bare chips to win that space back.
+    It is now a row of *cards* without being a card grid: the card IS the button.
+    Two lines of label (ticker + score, then the company name) and a sparkline
+    painted behind them as a CSS background image, which is the only way a
+    Streamlit button can carry a graphic -- its label is markdown text and cannot
+    hold an <svg>. That costs ~28px over the chip row rather than the ~210px the
+    card block cost, so the engine stays above the fold and the reader gets the
+    shape of the move as well as the score.
     """
     picks = market_intel.top_picks(version, N_PICKS)
     if picks.empty:
         return
 
-    # The score band's color rides on the button itself. Streamlit gives each
-    # widget a `st-key-<key>` container class, and the key carries the symbol --
-    # so per-pick styling is a generated rule per symbol rather than a wrapper
-    # element the button could not live inside anyway.
+    # Per-symbol styling. Streamlit gives each widget a `st-key-<key>` container
+    # class and the key carries the symbol, so this is a generated rule per pick
+    # rather than a wrapper element the button could not live inside anyway.
     rules = []
     for _, row in picks.iterrows():
+        sym = str(row["symbol"])
         color = market_intel.band_color(float(row["overall_score"]), ctx.pal)
         # A ticker can carry '.' or '-' (BRK-B, BF.B). Both are legal in a class
         # NAME but '.' opens a class SELECTOR, so it has to be escaped here.
-        css_sym = str(row["symbol"]).replace(".", "\\.")
+        css_sym = sym.replace(".", "\\.")
+        closes = dal.intel_sparkline(version, sym, PICK_SPARK_SESSIONS)["close"].tolist()
+        # Direction comes from the series itself (`spark_color`), not from the
+        # score: the score is a cross-sectional rank and the line is this
+        # company's own move, so colouring one by the other would be two
+        # different claims wearing one hue.
+        spark = ui.sparkline_uri(closes, color=ui.spark_color(closes, ctx.pal),
+                                 w=78, h=22, uid=f"p{sym}")
         rules.append(
             f"div.st-key-rs_pick_{css_sym} button:not(:disabled)"
             f" {{ border-left: 3px solid {color} !important; }}")
+        if spark:
+            rules.append(
+                f"div.st-key-rs_pick_{css_sym} button"
+                f" {{ background-image: {spark} !important; }}")
     st.markdown("<style>" + "".join(rules) + "</style>", unsafe_allow_html=True)
 
     current = st.session_state.get("rs_symbol", DEFAULT_SYMBOL)
-    cols = st.columns([2.0] + [1.0] * len(picks) + [1.6])
+    cols = st.columns([1.9] + [1.15] * len(picks) + [1.5])
     with cols[0]:
         st.markdown(
             f'<div class="pick-lead">TODAY&#8217;S OPPORTUNITIES'
@@ -1205,12 +1250,14 @@ def _opportunities(ctx: Ctx, version: str) -> None:
         active = sym == current
         with cols[i + 1]:
             st.button(
-                f"{sym} · {float(row['overall_score']):.0f}",
+                f"**{sym}**  ·  {float(row['overall_score']):.0f}  \n"
+                f"{_pick_name(row['name'])}",
                 key=f"rs_pick_{sym}", width="stretch", disabled=active,
                 on_click=_use_pick, args=(sym,),
-                help=(f"{row['name']} — shown below"if active else
+                help=(f"{row['name']} — shown below" if active else
                       f"{row['name']} · {row.get('sector') or 'sector unknown'} · "
                       f"score {float(row['overall_score']):.0f}/100. "
+                      f"The line is the last {PICK_SPARK_SESSIONS} sessions. "
                       f"Load it into the panel below."),
             )
     with cols[-1]:
@@ -1223,7 +1270,8 @@ def _opportunities(ctx: Ctx, version: str) -> None:
         "0–100 composites of each stock's percentile ranks on the metrics that "
         "matter over a medium-term horizon, computed in SQL from reported "
         "financials and price history — never by a model. A position within the "
-        "ranked universe, not a forecast, and not advice."
+        f"ranked universe, not a forecast, and not advice. The line behind each "
+        f"name is that company's last {PICK_SPARK_SESSIONS} closes."
     )
 
 
@@ -1248,19 +1296,33 @@ def render(ctx: Ctx) -> None:
     """
     version = dal.intel_version()
 
-    find, question = st.columns([1.35, 1.0])
-    with find:
-        st.markdown('<div class="rs-lbl">Research a company</div>',
-                    unsafe_allow_html=True)
-        typed = st.text_input(
-            "Search", key="rs_query", label_visibility="collapsed",
-            placeholder="Ticker or company name — AAPL, Costco, Rocket Lab…",
-        )
-        # Resolution renders here, under the box that caused it: a disambiguation
-        # list or a "nothing matches" belongs beside the input it is about.
-        symbol = _resolve(typed, version)
-    with question:
-        asked = _ask_input()
+    # The hero. One panel holding the greeting and both entry points, rather
+    # than two loose inputs on the page background -- a landing page needs a
+    # place the eye lands, and on a dark surface an unbounded pair of text boxes
+    # is not one. `st.container(key=...)` is the hook: raw HTML cannot wrap real
+    # Streamlit widgets, and each widget sits in its own DOM wrapper so a
+    # sibling selector never reaches them either.
+    with st.container(key="rs_hero"):
+        st.markdown(
+            f'<div class="hero-greet">{ui.esc(ui.greeting())}<em>.</em></div>'
+            f'<div class="hero-sub">Search any US-listed company, or ask the '
+            f'market a question — both answered from the same SQL.</div>',
+            unsafe_allow_html=True)
+
+        find, question = st.columns([1.35, 1.0])
+        with find:
+            st.markdown('<div class="rs-lbl">Research a company</div>',
+                        unsafe_allow_html=True)
+            typed = st.text_input(
+                "Search", key="rs_query", label_visibility="collapsed",
+                placeholder="Ticker or company name — AAPL, Costco, Rocket Lab…",
+            )
+            # Resolution renders here, under the box that caused it: a
+            # disambiguation list or a "nothing matches" belongs beside the
+            # input it is about.
+            symbol = _resolve(typed, version)
+        with question:
+            asked = _ask_input()
 
     _opportunities(ctx, version)
     _ask_answer(ctx, asked)

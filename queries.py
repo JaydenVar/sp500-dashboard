@@ -1744,6 +1744,29 @@ INTEL_SYMBOL_BOUNDS_NOTE = (
 )
 
 
+# The trailing closes behind a sparkline. Deliberately its own statement rather
+# than a `.tail()` on INTEL_SYMBOL_HISTORY: that one computes two moving
+# averages, a 21-session volatility, a drawdown and a rebased cumulative return
+# over the company's whole five-year record, and a 60-point shape needs none of
+# them. The inner ORDER BY ... DESC LIMIT is what makes this an index seek to the
+# newest rows instead of a full scan the outer sort then throws away.
+INTEL_SPARKLINE = """
+SELECT date, close FROM (
+    SELECT date, close
+    FROM intel_prices
+    WHERE symbol = :symbol
+    ORDER BY date DESC
+    LIMIT :sessions
+)
+ORDER BY date
+"""
+INTEL_SPARKLINE_NOTE = (
+    "The most recent daily closes for one company in the wide universe, oldest "
+    "first — the shape drawn behind each name on Today's Opportunities. Closes "
+    "only: a sparkline has no axis to read a second series against."
+)
+
+
 # Registered here rather than in the EXPLORER literal above for the same reason
 # the Journey entries are: these read the intel_* tables, which are built from a
 # separate artifact and are empty on a clone that has not run fetch_intel.py.

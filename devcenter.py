@@ -431,8 +431,8 @@ def _interview() -> None:
     with st.expander("**1. Walk me through this project in 60 seconds.**", expanded=True):
         st.markdown(
             """
-It's a market analytics platform over 25 years of daily data for the S&P 500 and
-49 large-cap equities — about 300,000 rows.
+MarketLens is an equity research platform over 25 years of daily data for the
+S&P 500 and 49 large-cap equities — about 300,000 rows.
 
 The architecture rule is that **every number on screen is the output of a SQL
 query**. The analysis lives in SQLite views and materialized rollups; Python runs
@@ -648,8 +648,9 @@ def _about_project() -> None:
         """
 #### What it is
 
-A market analytics platform over ~25 years of daily history for the S&P 500 index
-and 49 large-cap US equities — roughly 300,000 rows — built to demonstrate SQL,
+MarketLens — an equity research platform over ~25 years of daily history for the
+S&P 500 index and 49 large-cap US equities — roughly 300,000 rows — built to
+demonstrate SQL,
 database design, data engineering and data visualization in one place.
 
 #### Data provenance

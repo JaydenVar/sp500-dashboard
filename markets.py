@@ -53,10 +53,14 @@ def index_view(ctx: Ctx) -> None:
         f"Index · latest session {pd.to_datetime(q['date']):%b %d, %Y}", pal,
     )
 
+    # Only the return card carries a sparkline -- it is the path that card's own
+    # number summarizes. See the same note in research._history_core.
+    idx_closes = px["close"].tolist()
     ui.kpi_cards([
         {"icon": "📅", "label": f"Return · {preset}", "value": ui.fmt_pct(ws["period_return"], 1),
          "change": f"{ws['trading_days']:,} sessions", "change_dir": "flat",
-         "foot": "Close-to-close over the window"},
+         "foot": "Close-to-close over the window",
+         "spark": ui.sparkline(idx_closes, color=ui.spark_color(idx_closes, pal), uid="ovidx")},
         {"icon": "📈", "label": "CAGR", "value": ui.fmt_pct(ws["cagr"], 1),
          "foot": "Annualized over the window"},
         {"icon": "🏔", "label": "Window high", "value": ui.fmt_price(ws["period_high"], 0),

@@ -590,6 +590,19 @@ def intel_window_stats(version: str, symbol: str, start: str, end: str) -> pd.Se
 
 
 @st.cache_data(ttl=TTL, show_spinner=False)
+def intel_sparkline(version: str, symbol: str, sessions: int = 60) -> pd.DataFrame:
+    """Trailing closes for one company, for the sparkline behind its pick chip.
+
+    Version-keyed like every other intelligence read, so a rebuilt artifact
+    invalidates the shape at the same moment it invalidates the score above it --
+    a chip showing last quarter's line beside this quarter's rank would be the
+    two halves of one card disagreeing.
+    """
+    return _dated(_read(queries.INTEL_SPARKLINE,
+                        {"symbol": symbol, "sessions": int(sessions)}))
+
+
+@st.cache_data(ttl=TTL, show_spinner=False)
 def intel_bounds(version: str, symbol: str) -> tuple[dt.date, dt.date] | None:
     """First and last recorded session, or None when the symbol has no bars."""
     df = _read(queries.INTEL_SYMBOL_BOUNDS, {"symbol": symbol})
