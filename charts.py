@@ -9,23 +9,158 @@ ink tokens rather than the series color.
 from __future__ import annotations
 
 import datetime as dt
+import math
 
 import plotly.graph_objects as go
 
-# Modebar: zoom, pan, box/lasso-free selection removed, image download kept.
-# `Reset View` is also offered as a real button in the UI, because the modebar
-# is discoverable only on hover.
+# ---------------------------------------------------------------------------
+# Interaction
+# ---------------------------------------------------------------------------
+# A chart is either ZOOMABLE (a continuous axis a reader can traverse: a date
+# axis, a scatter of two measures) or STATIC (a category axis, a heatmap, a
+# donut -- there is no view to move, and a drag would only ever produce a
+# meaningless crop). That property belongs to the FIGURE, not to the call site:
+# `style(zoomable=...)` stamps it on `layout.meta`, and `plot_config` and
+# `components.chart` both read it back. Twenty call sites each deciding whether
+# to pass a reset button is exactly how the chart heights drifted to eight
+# different values before the H_* scale existed.
+_MODEBAR_BASE = ["select2d", "lasso2d", "toggleSpikelines", "autoScale2d"]
+_TO_IMAGE = {"format": "png", "scale": 2, "filename": "chart"}
+
+# Modebar: zoom, pan and image download kept; selection tools and the second,
+# subtly-different reset ("autoscale") removed. `Reset view` is also offered as
+# a real button in the UI, because the modebar is discoverable only on hover.
 PLOT_CONFIG = {
     "displayModeBar": True,
     "displaylogo": False,
-    "scrollZoom": False,  # would hijack page scrolling
+    # Scroll-wheel and touchpad pinch zoom, which is what every trading terminal
+    # does and what a reader who has used one expects. It DOES capture the wheel
+    # while the pointer is over the plot, which is why it is enabled only here,
+    # on charts that have a view worth moving -- the tall categorical charts on
+    # Markets and Risk keep the page scrolling normally. Superseded the earlier
+    # `scrollZoom: False`; see PROJECT_STATE.
+    "scrollZoom": True,
+    "doubleClick": "reset",  # double-click restores the authored axes
     # Required, not cosmetic: charts inside a Streamlit tab that is not the active
     # one at first paint get measured while hidden and render at a fraction of the
     # container width. `responsive` makes Plotly re-measure when it becomes visible.
     "responsive": True,
-    "modeBarButtonsToRemove": ["select2d", "lasso2d", "toggleSpikelines"],
-    "toImageButtonOptions": {"format": "png", "scale": 2, "filename": "chart"},
+    "showTips": False,  # suppresses Plotly's "click to edit title" nag
+    "modeBarButtonsToRemove": _MODEBAR_BASE,
+    "toImageButtonOptions": _TO_IMAGE,
 }
+
+# Static charts keep hover and the PNG export and lose everything that implies a
+# view: no drag, no wheel capture, no zoom buttons, no reset. Their axes are also
+# `fixedrange` (see `style`), so Plotly would hide most of these anyway -- listing
+# them keeps the bar identical whether or not Plotly's heuristic changes.
+PLOT_CONFIG_STATIC = {
+    **PLOT_CONFIG,
+    "scrollZoom": False,
+    "modeBarButtonsToRemove": _MODEBAR_BASE + [
+        "zoom2d", "pan2d", "zoomIn2d", "zoomOut2d", "resetScale2d",
+    ],
+}
+
+# Above this many points a series is drawn with WebGL instead of SVG. 25 years of
+# daily closes is ~6,300 points per series, and panning an SVG path that long
+# re-renders every segment on every frame. Below the threshold SVG is kept on
+# purpose: each WebGL figure holds its own GPU context and browsers cap how many
+# a page may have at once, so a short window (1Y = ~252 points, already smooth)
+# should not spend one.
+GL_POINTS = 2000
+
+
+def _scatter(n: int, *, log: bool = False):
+    """`go.Scattergl` for a long series, `go.Scatter` for a short one.
+
+    `log=True` forces SVG. Every log-axis line in this app is also area-filled to
+    zero, and zero is negative infinity on a log axis -- a clamp the SVG renderer
+    has always handled here and the WebGL one is not worth trusting sight-unseen
+    for the sake of a chart (the Journey) whose frame rate is bounded by
+    Streamlit's rerun anyway.
+    """
+    return go.Scattergl if (n >= GL_POINTS and not log) else go.Scatter
+
+
+def plot_config(fig: go.Figure) -> dict:
+    """The Plotly config a figure should be rendered with, read off the figure."""
+    return PLOT_CONFIG if is_zoomable(fig) else PLOT_CONFIG_STATIC
+
+
+def is_zoomable(fig: go.Figure) -> bool:
+    """Whether `style` marked this figure as having a view worth moving."""
+    return bool((fig.layout.meta or {}).get("zoomable"))
+
+
+# How many points to sample per trace when fingerprinting a figure's data. The
+# fingerprint only needs an order of magnitude, and scanning every point of every
+# trace on every rerun is a cost paid for nothing.
+_SIG_SAMPLES = 400
+
+
+def view_signature(fig: go.Figure) -> str:
+    """A token that changes when the DATA under a chart changes, and not otherwise.
+
+    This is what `uirevision` is keyed on, and the distinction it draws is the
+    whole feature. Streamlit re-sends the entire figure on every rerun, so
+    without `uirevision` a reader's zoom is destroyed by any unrelated widget --
+    switching the theme, opening the sidebar, adding a moving-average overlay.
+    With `uirevision` held constant the view survives all of those. But held
+    constant *forever* it would be just as wrong in the other direction: a zoom
+    into 2008 would persist onto a chart of a different period, showing a window
+    the new data does not even cover.
+
+    So the signature is deliberately narrow. It is the union x-domain across the
+    traces plus the order of magnitude of |y|:
+
+      - adding or hiding an overlay          -> same domain, same magnitude -> KEPT
+      - the Journey playhead advancing       -> the full-record ghost trace pins
+                                                both ends                  -> KEPT
+      - changing the date window             -> domain moves               -> RESET
+      - switching to a stock priced 10x away -> magnitude bucket moves     -> RESET
+
+    Two companies at a similar price level share a bucket, so the reader's time
+    window carries across a symbol change. That is intentional: keeping the
+    period you are studying while swapping the instrument is what a terminal does.
+    """
+    if not is_zoomable(fig):
+        return "static"
+
+    firsts: list[str] = []
+    lasts: list[str] = []
+    mags: list[float] = []
+    for tr in fig.data:
+        xs = getattr(tr, "x", None)
+        if xs is None or len(xs) == 0:
+            continue
+        firsts.append(str(xs[0]))
+        lasts.append(str(xs[-1]))
+
+        # Candlesticks carry no `y`; `high` is the series that sets their scale.
+        ys = getattr(tr, "y", None)
+        if ys is None:
+            ys = getattr(tr, "high", None)
+        if ys is None or len(ys) == 0:
+            continue
+        stride = max(1, len(ys) // _SIG_SAMPLES)
+        try:
+            # numpy scalars, Decimals and None all reach here; anything that will
+            # not coerce simply does not contribute to the magnitude bucket.
+            finite = [abs(float(v)) for v in ys[::stride] if v is not None and v == v]
+        except (TypeError, ValueError):
+            continue
+        if finite:
+            mags.append(max(finite))
+
+    if not firsts:
+        return "static"
+
+    # str() rather than the native values: x is a date on most charts and a float
+    # on the risk scatter, and this is an identity fingerprint, not an ordering.
+    peak = max(mags) if mags else 0.0
+    bucket = int(math.floor(math.log10(peak))) if peak > 0 else 0
+    return f"{min(firsts)}|{max(lasts)}|{bucket}"
 
 # Chart heights, as a four-step scale rather than a number chosen per call site.
 # Every builder's default is one of these, so charts sitting side by side or
@@ -123,8 +258,15 @@ def wash(hex_color: str, alpha: float = 0.10) -> str:
 
 def style(fig: go.Figure, pal: dict, *, y_title: str = "", height: int | None = None,
           crosshair: bool = True, legend: bool = False, y_tickformat: str | None = None,
-          zero_line: bool = False) -> go.Figure:
-    """Apply the house chart styling. Called by every builder below."""
+          zero_line: bool = False, zoomable: bool = True) -> go.Figure:
+    """Apply the house chart styling and interaction model. Called by every builder.
+
+    `crosshair` chooses how hover AGGREGATES (a unified box across the traces at
+    one x, or the single closest point). `zoomable` chooses whether the chart has
+    a VIEW at all -- drag, wheel, spikes, a reset button and `uirevision`. They
+    are separate because a candlestick wants per-session OHLC hover rather than a
+    unified box and is still very much a chart you pan through.
+    """
     fig.update_layout(
         template=pal["plotly_template"],
         paper_bgcolor="rgba(0,0,0,0)",
@@ -138,6 +280,7 @@ def style(fig: go.Figure, pal: dict, *, y_title: str = "", height: int | None = 
             font=dict(color=pal["text_primary"], size=12,
                       family='system-ui, -apple-system, "Segoe UI", sans-serif'),
             align="left",
+            namelength=-1,  # never truncate a series name into "AAP…"
         ),
         showlegend=legend,
         legend=dict(
@@ -145,9 +288,29 @@ def style(fig: go.Figure, pal: dict, *, y_title: str = "", height: int | None = 
             bgcolor="rgba(0,0,0,0)", borderwidth=0,
             font=dict(color=pal["text_secondary"], size=11.5),
         ),
-        dragmode="pan",
+        # Drag pans (a touchpad two-finger drag included); the wheel and pinch
+        # zoom via PLOT_CONFIG. A static chart takes no drag at all rather than
+        # offering a crop of a category axis.
+        dragmode="pan" if zoomable else False,
+        # `spikedistance` defaults to a 20px radius, which is what makes the
+        # crosshair blink out the moment the pointer drifts off the line -- the
+        # flicker reads as the chart losing track of the cursor. -1 removes the
+        # cutoff, so the crosshair stays with the pointer anywhere in the plot.
+        spikedistance=-1 if zoomable else 20,
+        # `hoverdistance` is NOT unbounded on unified charts, deliberately. Under
+        # `x unified` every trace contributes its nearest point to one box, and
+        # with no cutoff the market-event markers `add_events` overlays would be
+        # pulled into the tooltip at every x -- a paragraph about the 2008 crash
+        # attached to a hover in 2019. Unified hover already answers anywhere
+        # along x, so the cutoff costs it nothing. Charts with `closest` hover (a
+        # candlestick, the risk scatter) do want the unbounded version: there the
+        # nearest point IS the reading, and 20px means the readout drops out
+        # between sessions.
+        hoverdistance=-1 if (zoomable and not crosshair) else 20,
         transition=dict(duration=0),
         autosize=True,
+        # Read back by `plot_config`, `view_signature` and `components.chart`.
+        meta=dict(zoomable=zoomable),
     )
     if height:
         fig.update_layout(height=height)
@@ -156,9 +319,12 @@ def style(fig: go.Figure, pal: dict, *, y_title: str = "", height: int | None = 
         showgrid=False,
         showline=True, linecolor=pal["baseline"], linewidth=1,
         tickfont=dict(color=pal["muted"], size=11),
-        # The crosshair: readers aim at a date, not at a 2px line.
-        showspikes=crosshair, spikemode="across", spikethickness=1,
-        spikecolor=pal["muted"], spikedash="solid",
+        # The crosshair: readers aim at a date, not at a 2px line. It now follows
+        # zoomability rather than hover mode, so the candlestick and the risk
+        # scatter get one too -- both are charts you read a coordinate off.
+        showspikes=zoomable, spikemode="across", spikethickness=1,
+        spikecolor=pal["muted"], spikedash="solid", spikesnap="data",
+        fixedrange=not zoomable,
         rangeslider=dict(visible=False),
     )
     fig.update_yaxes(
@@ -167,7 +333,16 @@ def style(fig: go.Figure, pal: dict, *, y_title: str = "", height: int | None = 
         zeroline=zero_line, zerolinecolor=pal["baseline"], zerolinewidth=1,
         showline=False,
         tickfont=dict(color=pal["muted"], size=11),
+        fixedrange=not zoomable,
     )
+    # A horizontal spike only where hover is `closest`. Under `x unified` the
+    # hover box already prints every series' y at that x, so a second line
+    # pointing at one of them is noise -- and ambiguous about which one it means.
+    if zoomable and not crosshair:
+        fig.update_yaxes(
+            showspikes=True, spikemode="across", spikethickness=1,
+            spikecolor=pal["muted"], spikedash="solid", spikesnap="cursor",
+        )
     if y_tickformat:
         fig.update_yaxes(tickformat=y_tickformat)
     return fig
@@ -188,7 +363,7 @@ def price_line(df, pal: dict, *, log: bool = False, label: str | None = None,
                height: int = H_PRIMARY, color: str | None = None) -> go.Figure:
     color = color or pal["series"][0]
     fig = go.Figure()
-    fig.add_trace(go.Scatter(
+    fig.add_trace(_scatter(len(df), log=log)(
         x=df["date"], y=df["close"], mode="lines", name="Close",
         line=dict(color=color, width=2, shape="linear"),
         fill="tozeroy", fillcolor=wash(color, 0.08),
@@ -231,14 +406,15 @@ def volume_bars(df, pal: dict, *, height: int = H_STRIP) -> go.Figure:
 def moving_average_chart(df, pal: dict, *, height: int = H_PRIMARY) -> go.Figure:
     """Close with 50/200-session means. Three series -> legend is mandatory."""
     fig = go.Figure()
-    fig.add_trace(go.Scatter(
+    scatter = _scatter(len(df))
+    fig.add_trace(scatter(
         x=df["date"], y=df["close"], mode="lines", name="Close",
         line=dict(color=pal["series"][0], width=2),
         hovertemplate="<b>%{y:,.2f}</b><extra>Close</extra>",
     ))
     for col, name, slot in (("ma_50", "50-session MA", 1), ("ma_200", "200-session MA", 6)):
         if col in df.columns and df[col].notna().any():
-            fig.add_trace(go.Scatter(
+            fig.add_trace(scatter(
                 x=df["date"], y=df[col], mode="lines", name=name,
                 line=dict(color=pal["series"][slot], width=2),
                 connectgaps=False,
@@ -273,7 +449,7 @@ def indexed_comparison(pivot, pal: dict, *, height: int = H_PRIMARY, log: bool =
     fig = go.Figure()
     for i, col in enumerate(pivot.columns):
         s = pivot[col].dropna()
-        fig.add_trace(go.Scatter(
+        fig.add_trace(_scatter(len(s), log=log)(
             x=s.index, y=s.values, mode="lines", name=str(col),
             line=dict(color=pal["series"][i % len(pal["series"])], width=2),
             hovertemplate="<b>%{y:,.1f}</b><extra>" + str(col) + "</extra>",
@@ -301,7 +477,7 @@ def area_series(df, value_col, pal: dict, *, color_key: str = "blue", y_title: s
                 zero_line: bool = True) -> go.Figure:
     color = pal[color_key] if color_key in pal else color_key
     fig = go.Figure()
-    fig.add_trace(go.Scatter(
+    fig.add_trace(_scatter(len(df))(
         x=df["date"], y=df[value_col], mode="lines", name=y_title or value_col,
         line=dict(color=color, width=2), fill="tozeroy", fillcolor=wash(color, 0.10),
         hovertemplate="<b>%{y:" + tickformat + "}</b><extra></extra>",
@@ -325,7 +501,7 @@ def yearly_return_bars(y, pal: dict, *, height: int = H_PRIMARY) -> go.Figure:
         hovertemplate="<b>%{y:.1%}</b><extra>%{x}</extra>", name="Year return",
     ))
     fig = style(fig, pal, y_title="Return", height=height, crosshair=False,
-                y_tickformat=".0%")
+                y_tickformat=".0%", zoomable=False)
     fig.add_hline(y=0, line_color=pal["baseline"], line_width=1)
     fig.update_xaxes(type="category", tickangle=-45)
     fig.update_layout(bargap=0.28)
@@ -347,7 +523,7 @@ def seasonality_heatmap(pivot, pal: dict, month_names, *, height: int = H_TALL) 
             tickfont=dict(color=pal["muted"], size=10.5),
         ),
     ))
-    fig = style(fig, pal, height=height, crosshair=False)
+    fig = style(fig, pal, height=height, crosshair=False, zoomable=False)
     fig.update_yaxes(autorange="reversed", showgrid=False)
     fig.update_xaxes(showline=False)
     return fig
@@ -372,7 +548,7 @@ def sector_bars(df, pal: dict, *, height: int = H_TALL) -> go.Figure:
         ),
         name="Sector",
     ))
-    fig = style(fig, pal, height=height, crosshair=False)
+    fig = style(fig, pal, height=height, crosshair=False, zoomable=False)
     fig.update_xaxes(tickformat=".0%", showgrid=True, gridcolor=pal["gridline"], showline=False)
     fig.update_yaxes(showgrid=False, tickfont=dict(color=pal["text_secondary"], size=11.5))
     fig.add_vline(x=0, line_color=pal["baseline"], line_width=1)
@@ -407,7 +583,7 @@ def correlation_heatmap(matrix, pal: dict, *, height: int = H_TALL) -> go.Figure
             tickfont=dict(color=pal["muted"], size=10.5),
         ),
     ))
-    fig = style(fig, pal, height=height, crosshair=False)
+    fig = style(fig, pal, height=height, crosshair=False, zoomable=False)
     fig.update_yaxes(autorange="reversed", showgrid=False,
                      tickfont=dict(color=pal["text_secondary"], size=11.5))
     fig.update_xaxes(showline=False, side="top",
@@ -438,7 +614,7 @@ def allocation_donut(df, pal: dict, *, label_col: str = "symbol",
         textfont=dict(color=pal["text_primary"], size=11),
         hovertemplate="<b>%{label}</b><br>%{percent:.1%} of the basket<extra></extra>",
     ))
-    fig = style(fig, pal, height=height, crosshair=False)
+    fig = style(fig, pal, height=height, crosshair=False, zoomable=False)
     fig.update_layout(margin=dict(l=8, r=8, t=28, b=28))
     return fig
 
@@ -468,7 +644,7 @@ def contribution_bars(df, pal: dict, *, height: int = H_PRIMARY) -> go.Figure:
         ),
         name="Contribution",
     ))
-    fig = style(fig, pal, height=height, crosshair=False)
+    fig = style(fig, pal, height=height, crosshair=False, zoomable=False)
     fig.update_xaxes(tickformat=".0%", showgrid=True, gridcolor=pal["gridline"],
                      showline=False)
     fig.update_yaxes(showgrid=False, tickfont=dict(color=pal["text_secondary"], size=11.5))
@@ -490,7 +666,7 @@ def multi_series(frames: dict, pal: dict, *, value_col: str, y_title: str,
         if df is None or df.empty or value_col not in df.columns:
             continue
         s = df.dropna(subset=[value_col])
-        fig.add_trace(go.Scatter(
+        fig.add_trace(_scatter(len(s))(
             x=s["date"], y=s[value_col], mode="lines", name=str(sym),
             line=dict(color=pal["series"][i % len(pal["series"])], width=2),
             hovertemplate="<b>%{y:" + hover_fmt + "}</b><extra>" + str(sym) + "</extra>",
@@ -526,7 +702,7 @@ def generic_bars(df, pal: dict, *, label_col: str, value_col: str,
         hovertemplate="<b>%{x}</b><extra>%{y}</extra>",
         name=str(value_col),
     ))
-    fig = style(fig, pal, height=height, crosshair=False)
+    fig = style(fig, pal, height=height, crosshair=False, zoomable=False)
     fig.update_xaxes(showgrid=True, gridcolor=pal["gridline"], showline=False,
                      tickformat=tickformat)
     fig.update_yaxes(showgrid=False, tickfont=dict(color=pal["text_secondary"], size=11.5))

@@ -13,6 +13,8 @@ import zoneinfo
 import pandas as pd
 import streamlit as st
 
+import charts
+
 
 def _market_tz():
     """Exchange-local timezone, resolved defensively.
@@ -395,22 +397,47 @@ def live_quote_strip(q: dict, meta: str, pal: dict) -> None:
 # ---------------------------------------------------------------------------
 # Charts
 # ---------------------------------------------------------------------------
-def chart(fig, *, key: str, config: dict, caption: str = "", controls: bool = True,
-          select: bool = False):
-    """Render a Plotly figure with a visible reset control.
+def chart(fig, *, key: str, config: dict | None = None, caption: str = "",
+          controls: bool | None = None, select: bool = False):
+    """Render a Plotly figure with the interaction model the figure asked for.
 
-    Zoom and pan live in the browser, so Python can't read them back. Bumping a
-    nonce in the chart's key remounts the component, which is what actually
-    discards the client-side view state -- the same thing the toolbar's "reset
-    axes" does, but as a control a reader can find without hovering first.
+    The figure decides, not the call site. `charts.style(zoomable=...)` stamps
+    `layout.meta`, and this reads it back for all three of: which Plotly config
+    to use (wheel zoom and a full modebar, or a fixed frame), whether to draw a
+    reset button, and whether the view is worth preserving at all. Passing
+    `config` or `controls` explicitly still wins, but nothing needs to.
+
+    **Zoom survives a rerun because of `uirevision`.** Streamlit re-sends the
+    whole figure whenever anything on the page changes, and Plotly's default is
+    to re-home the axes each time it does -- so before this, every zoom was
+    destroyed by an unrelated widget. Holding `uirevision` constant tells Plotly
+    to keep the reader's view across a re-render; keying it on
+    `charts.view_signature` is what still lets a real data change reset it. See
+    that function for exactly which changes count.
+
+    The reset button then has to defeat `uirevision` deliberately, which is what
+    the nonce is for: bumping it changes the widget key, Streamlit remounts the
+    component, and the client-side view state goes with it. That is a heavier
+    hammer than re-keying `uirevision`, and the right one -- it is the single
+    action in the app whose entire purpose is to discard that state, and it
+    cannot half-work.
 
     `select=True` makes the chart report clicked points back to Python and
     returns the selection; it is off by default because a chart that reruns the
     script on every stray click is worse than one that does nothing. Only the
     Journey uses it, where clicking an event marker is the point.
     """
+    zoomable = charts.is_zoomable(fig)
+    if config is None:
+        config = charts.plot_config(fig)
+    if controls is None:
+        controls = zoomable
+
     nonce_key = f"__nonce_{key}"
     nonce = st.session_state.get(nonce_key, 0)
+
+    if zoomable:
+        fig.update_layout(uirevision=f"{key}|{charts.view_signature(fig)}")
 
     if controls:
         left, right = st.columns([5, 1.15])

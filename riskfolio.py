@@ -22,7 +22,6 @@ import charts
 import components as ui
 import data_access as dal
 import events
-from charts import PLOT_CONFIG
 from pagectx import Ctx
 from universe import INDEX_SYMBOL
 
@@ -86,8 +85,7 @@ def risk_view(ctx: Ctx) -> None:
                      "foot": "Fewest for any pair in the window"},
                 ])
 
-            ui.chart(charts.correlation_heatmap(cm, pal), key="risk_corr",
-                     config=PLOT_CONFIG, controls=False)
+            ui.chart(charts.correlation_heatmap(cm, pal), key="risk_corr")
             ui.note(
                 "Correlation of DAILY RETURNS, not of prices: two rising price "
                 "series correlate near 1.0 whatever they actually did, because "
@@ -136,7 +134,7 @@ def risk_view(ctx: Ctx) -> None:
         f.update_xaxes(title=dict(text="Annualized volatility",
                                   font=dict(color=pal["muted"], size=11.5)),
                        tickformat=".0%", showgrid=True, gridcolor=pal["gridline"])
-        ui.chart(f, key="risk_scatter", config=PLOT_CONFIG, controls=False)
+        ui.chart(f, key="risk_scatter")
         ui.note(
             "One point per symbol, over each symbol's own listed history — so the "
             "horizon differs between points. Labels are drawn for every point here "
@@ -246,7 +244,7 @@ def portfolio_view(ctx: Ctx) -> None:
         label=ui.fmt_pct(pser["cumulative_return"].iloc[-1], 0),
     )
     charts.add_events(fig_pf, pal, events.in_range(stats["first_date"], END))
-    ui.chart(fig_pf, key="pf_growth", config=PLOT_CONFIG)
+    ui.chart(fig_pf, key="pf_growth")
 
     # Benchmark on ONE shared axis (never a second y-scale). Both series
     # are percentages from the same starting session, so they are directly
@@ -266,9 +264,9 @@ def portfolio_view(ctx: Ctx) -> None:
                 {"Portfolio": pser.rename(columns={"cumulative_return": "v"}),
                  "S&P 500": bench_ser.rename(columns={"cumulative_return": "v"})},
                 pal, value_col="v", y_title="Cumulative return",
-                height=charts.H_PRIMARY, tickformat=".0%", zero_line=True, hover_fmt=".1%",
+                height=charts.H_PRIMARY, tickformat=".0%", zero_line=True, hover_fmt=".1%"
             ),
-            key="pf_vs_bench", config=PLOT_CONFIG, controls=False,
+            key="pf_vs_bench"
         )
         lead = stats["total_return"] - bench_ser["cumulative_return"].iloc[-1]
         ui.note(
@@ -288,8 +286,7 @@ def portfolio_view(ctx: Ctx) -> None:
         "weight": [w for _, w in weights],
     })
     with alloc_col:
-        ui.chart(charts.allocation_donut(mix, pal), key="pf_alloc",
-                 config=PLOT_CONFIG, controls=False)
+        ui.chart(charts.allocation_donut(mix, pal), key="pf_alloc")
 
     contrib = dal.portfolio_contribution(weights, START, END)
     with contrib_col:
@@ -298,8 +295,7 @@ def portfolio_view(ctx: Ctx) -> None:
                            "This needs at least one full session after the "
                            "investment date.", kind="warn")
         else:
-            ui.chart(charts.contribution_bars(contrib, pal), key="pf_contrib",
-                     config=PLOT_CONFIG, controls=False)
+            ui.chart(charts.contribution_bars(contrib, pal), key="pf_contrib")
 
     if not contrib.empty:
         ui.note(

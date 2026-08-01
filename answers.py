@@ -16,7 +16,6 @@ import charts
 import components as ui
 import data_access as dal
 import events
-from charts import PLOT_CONFIG
 from universe import INDEX_SYMBOL
 
 
@@ -156,7 +155,7 @@ def biggest_drawdown(directory, pal, p):
         fig = charts.area_series(dd, "drawdown", pal, color_key="red",
                                  y_title="Drawdown", height=300, tickformat=".0%")
         charts.add_events(fig, pal, events.in_range(p.start, p.end))
-        ui.chart(fig, key="ans_dd", config=PLOT_CONFIG, controls=False,
+        ui.chart(fig, key="ans_dd",
                  caption=f"{w['symbol']} drawdown over {p.preset}")
 
     out = lb.assign(MaxDD=lb["max_drawdown"] * 100, Vol=lb["ann_volatility"] * 100)[
@@ -273,7 +272,7 @@ def compare(directory, pal, p):
     wide = charts.comparison_needs_log(pivot)
     fig = charts.indexed_comparison(pivot, pal, log=wide)
     charts.add_events(fig, pal, events.in_range(p.start, p.end), label=False)
-    ui.chart(fig, key="ans_cmp", config=PLOT_CONFIG,
+    ui.chart(fig, key="ans_cmp",
              caption="Rebased to 100 at the window start so different price levels are comparable")
     ui.note(
         "Both series share one axis — a second y-scale can be aligned to imply any "
@@ -319,7 +318,7 @@ def company_detail(directory, pal, p):
     if not px.empty:
         fig = charts.price_line(px, pal, label=ui.fmt_price(px["close"].iloc[-1]))
         charts.add_events(fig, pal, events.in_range(cs, p.end))
-        ui.chart(fig, key="ans_co", config=PLOT_CONFIG,
+        ui.chart(fig, key="ans_co",
                  caption=f"{sym} price over {p.preset}")
 
 
@@ -338,8 +337,7 @@ def sector(directory, pal, p):
     # A stated count trims the chart; the default leaves every sector visible,
     # since the comparison between them is the point of this answer.
     shown = df.head(p.limit) if p.source("limit") == "question" else df
-    ui.chart(charts.sector_bars(shown, pal), key="ans_sector", config=PLOT_CONFIG,
-             controls=False)
+    ui.chart(charts.sector_bars(shown, pal), key="ans_sector")
     ui.note(
         "Median member return, not the mean — over long windows one very large "
         "company can otherwise stand in for its whole sector."
@@ -370,7 +368,7 @@ def market_summary(directory, pal, p):
     if not px.empty:
         fig = charts.price_line(px, pal, label=ui.fmt_price(px["close"].iloc[-1], 0))
         charts.add_events(fig, pal, events.in_range(p.start, p.end))
-        ui.chart(fig, key="ans_mkt", config=PLOT_CONFIG,
+        ui.chart(fig, key="ans_mkt",
                  caption="Index level with market events marked")
 
 
@@ -456,7 +454,7 @@ def generated(question: str, df: pd.DataFrame, pal, *, insight_text: str = "",
             fig = charts.generic_bars(df, pal, label_col=label_col,
                                       value_col=value_col, tickformat=tickfmt)
         if fig is not None:
-            ui.chart(fig, key=f"{key}_chart", config=PLOT_CONFIG, controls=False,
+            ui.chart(fig, key=f"{key}_chart",
                      caption=ui.esc(question))
 
     pretty = df.copy()

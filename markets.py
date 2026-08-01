@@ -18,7 +18,6 @@ import charts
 import components as ui
 import data_access as dal
 import events
-from charts import PLOT_CONFIG
 from pagectx import Ctx
 from universe import INDEX_SYMBOL
 
@@ -84,8 +83,8 @@ def index_view(ctx: Ctx) -> None:
                             label=ui.fmt_price(px["close"].iloc[-1], 0))
     evts = events.in_range(START, END) if show_events else []
     charts.add_events(fig, pal, evts)
-    ui.chart(fig, key="ov_price", config=PLOT_CONFIG,
-             caption="Drag to pan · drag-select to zoom · toolbar (on hover) for autoscale and PNG export")
+    ui.chart(fig, key="ov_price",
+             caption="Drag to pan · scroll or pinch to zoom · double-click or Reset view to restore")
 
     if evts:
         ui.note(
@@ -94,7 +93,7 @@ def index_view(ctx: Ctx) -> None:
         )
 
     ui.section("Trading volume", "Daily share volume")
-    ui.chart(charts.volume_bars(px, pal), key="ov_vol", config=PLOT_CONFIG)
+    ui.chart(charts.volume_bars(px, pal), key="ov_vol")
 
 
 # ---------------------------------------------------------------------------
@@ -134,7 +133,7 @@ def sectors_view(ctx: Ctx) -> None:
     ])
 
     ui.section("Sector performance", f"Median member return · {preset}")
-    ui.chart(charts.sector_bars(sectors, pal), key="mkt_sector", config=PLOT_CONFIG, controls=False)
+    ui.chart(charts.sector_bars(sectors, pal), key="mkt_sector")
     ui.note(
         "Median member return, not the mean: over long windows a mean of total "
         "returns is dominated by one outlier (a single +85,000% name pulls a "
@@ -231,7 +230,7 @@ def performance_view(ctx: Ctx) -> None:
         if not full.empty:
             for idx in (full["year_return"].idxmax(), full["year_return"].idxmin()):
                 y.loc[idx, "label"] = ui.fmt_pct(y.loc[idx, "year_return"], 1)
-        ui.chart(charts.yearly_return_bars(y, pal), key="perf_yearly", config=PLOT_CONFIG, controls=False)
+        ui.chart(charts.yearly_return_bars(y, pal), key="perf_yearly")
         partials = y.loc[y["partial"], "year"].tolist()
         if partials:
             ui.note(
@@ -275,7 +274,7 @@ def performance_view(ctx: Ctx) -> None:
         )
         charts.add_events(fig_roll, pal, events.in_range(
             roll["date"].iloc[0].date().isoformat(), END))
-        ui.chart(fig_roll, key="perf_rolling", config=PLOT_CONFIG,
+        ui.chart(fig_roll, key="perf_rolling",
                  caption="Each point is the annualized return of the period ENDING that day")
         ui.note(
             f"Every {horizon} stretch in the record, not one window — the point plotted "
@@ -291,8 +290,7 @@ def performance_view(ctx: Ctx) -> None:
     if not m.empty:
         piv = m.pivot(index="year", columns="month", values="month_return")
         piv = piv.reindex(columns=[f"{i:02d}" for i in range(1, 13)])
-        ui.chart(charts.seasonality_heatmap(piv, pal, MONTHS), key="perf_season",
-                 config=PLOT_CONFIG, controls=False)
+        ui.chart(charts.seasonality_heatmap(piv, pal, MONTHS), key="perf_season")
         ui.table_view("Monthly returns — table view",
                       piv.style.format("{:+.2%}", na_rep="—"), hide_index=False)
 

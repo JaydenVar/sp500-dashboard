@@ -50,7 +50,6 @@ import market_intel
 import nlq
 import ranking
 import router
-from charts import PLOT_CONFIG
 from pagectx import Ctx
 from universe import INDEX_SYMBOL
 
@@ -190,12 +189,12 @@ def _history_core(ctx: Ctx, sym: str) -> None:
     hi_lo = (f"Window high {ui.fmt_price(cws['highest_close'])} · "
              f"low {ui.fmt_price(cws['lowest_close'])}")
     if view_mode == "Candles":
-        ui.chart(charts.candlestick(cpx, pal), key="co_candle", config=PLOT_CONFIG,
+        ui.chart(charts.candlestick(cpx, pal), key="co_candle",
                  caption=hi_lo)
     else:
         fig_co = charts.price_line(cpx, pal, label=ui.fmt_price(cpx["close"].iloc[-1]))
         charts.add_events(fig_co, pal, events.in_range(cs, ce))
-        ui.chart(fig_co, key="co_price", config=PLOT_CONFIG, caption=hi_lo)
+        ui.chart(fig_co, key="co_price", caption=hi_lo)
 
     # Six charts used to render in sequence here, which buried the comparison
     # below a scroll of secondary analysis. They are now one radio deep, for
@@ -215,7 +214,7 @@ def _history_core(ctx: Ctx, sym: str) -> None:
     if detail == "Moving averages":
         ui.section("Moving averages", "Close with trailing 50- and 200-session means")
         ma = dal.moving_averages(sym, cs, ce)
-        ui.chart(charts.moving_average_chart(ma, pal), key="co_ma", config=PLOT_CONFIG)
+        ui.chart(charts.moving_average_chart(ma, pal), key="co_ma")
         ui.note(
             "A moving-average line only begins once its full window exists, so the "
             "200-session average is absent for the first 200 sessions rather than "
@@ -226,11 +225,11 @@ def _history_core(ctx: Ctx, sym: str) -> None:
         left, right = st.columns(2)
         with left:
             ui.section("Trading volume")
-            ui.chart(charts.volume_bars(cpx, pal), key="co_vol", config=PLOT_CONFIG, controls=False)
+            ui.chart(charts.volume_bars(cpx, pal), key="co_vol")
         with right:
             ui.section("Daily returns")
             dr = dal.daily_returns(sym, cs, ce)
-            ui.chart(charts.returns_bars(dr, pal), key="co_ret", config=PLOT_CONFIG, controls=False)
+            ui.chart(charts.returns_bars(dr, pal), key="co_ret")
 
     elif detail == "Growth & volatility":
         l2, r2 = st.columns(2)
@@ -242,7 +241,7 @@ def _history_core(ctx: Ctx, sym: str) -> None:
                     charts.area_series(cr, "cumulative_return", pal, color_key="blue",
                                        y_title="Cumulative", height=charts.H_COMPACT,
                                        label=ui.fmt_pct(cr["cumulative_return"].iloc[-1], 0)),
-                    key="co_cum", config=PLOT_CONFIG, controls=False,
+                    key="co_cum"
                 )
         with r2:
             ui.section("Rolling volatility", "21-session, annualized")
@@ -253,7 +252,7 @@ def _history_core(ctx: Ctx, sym: str) -> None:
                                        y_title="Ann. volatility", height=charts.H_COMPACT,
                                        label=ui.fmt_pct(cv["ann_volatility_21d"].iloc[-1], 0, signed=False),
                                        zero_line=False),
-                    key="co_vola", config=PLOT_CONFIG, controls=False,
+                    key="co_vola"
                 )
 
     elif detail == "Drawdown":
@@ -270,7 +269,7 @@ def _history_core(ctx: Ctx, sym: str) -> None:
                 font=dict(color=pal["text_primary"], size=11.5),
             )
             charts.add_events(fig_dd, pal, events.in_range(cs, ce), label=False)
-            ui.chart(fig_dd, key="co_dd", config=PLOT_CONFIG, controls=False,
+            ui.chart(fig_dd, key="co_dd",
                      caption="Measured from the running all-time high — the loss an investor sat through")
 
     # ---- peer comparison ----
@@ -339,7 +338,7 @@ def _history_core(ctx: Ctx, sym: str) -> None:
                 tickformat=tickfmt, zero_line=zline, hover_fmt=hoverfmt,
             )
             charts.add_events(fig_m, pal, events.in_range(START, END), label=False)
-            ui.chart(fig_m, key=f"co_cmp_{col}", config=PLOT_CONFIG,
+            ui.chart(fig_m, key=f"co_cmp_{col}",
                      caption=f"{cmp_metric} for {len(frames)} symbols on one shared axis")
             ui.note(
                 "These metrics are already comparable across companies, so they "
@@ -362,7 +361,7 @@ def _history_core(ctx: Ctx, sym: str) -> None:
             )
             ui.chart(
                 charts.indexed_comparison(pivot, pal, log=(cscale == "Log")),
-                key="co_cmp", config=PLOT_CONFIG,
+                key="co_cmp"
             )
             if wide and cscale == "Log":
                 ui.note(
@@ -572,10 +571,10 @@ def journey_view(ctx: Ctx, sym: str) -> None:
             fig = charts.journey_path(path, pal, asof=asof, moments=moments,
                                       log=st.session_state.get("jrn_log", True))
             picked = ui.chart(
-                fig, key="jrn_path", config=PLOT_CONFIG, controls=False, select=True,
+                fig, key="jrn_path", select=True,
                 caption=("Solid is history travelled, faint is still ahead. Diamonds, "
                          "circles and squares are events — hover one, or click "
-                         "anywhere on the line to travel there."),
+                         "anywhere on the line to travel there.")
             )
             # A click is stashed and applied on the NEXT fragment run, above the
             # slider. Applying it here would write an already-instantiated
@@ -592,7 +591,7 @@ def journey_view(ctx: Ctx, sym: str) -> None:
                         pass  # a click on a non-date axis position; ignore
 
             ui.chart(charts.journey_drawdown_band(path, pal, asof=asof),
-                     key="jrn_dd", config=PLOT_CONFIG, controls=False,
+                     key="jrn_dd",
                      caption="How far below its own record the company was, at every point so far.")
 
         with panes[1]:
@@ -708,12 +707,12 @@ def _history_ranked(ctx: Ctx, sym: str, version: str) -> None:
     hi_lo = (f"Window high {ui.fmt_price(stats['highest_close'])} · "
              f"low {ui.fmt_price(stats['lowest_close'])}")
     if view_mode == "Candles":
-        ui.chart(charts.candlestick(hist, pal), key="rk_candle", config=PLOT_CONFIG,
+        ui.chart(charts.candlestick(hist, pal), key="rk_candle",
                  caption=hi_lo)
     else:
         fig = charts.price_line(hist, pal, label=ui.fmt_price(hist["close"].iloc[-1]))
         charts.add_events(fig, pal, events.in_range(cs, ce))
-        ui.chart(fig, key="rk_price", config=PLOT_CONFIG, caption=hi_lo)
+        ui.chart(fig, key="rk_price", caption=hi_lo)
 
     # The same one-at-a-time radio the core view uses, minus the peer comparison:
     # that one rebases several symbols against each other over the shared window
@@ -728,7 +727,7 @@ def _history_ranked(ctx: Ctx, sym: str, version: str) -> None:
 
     if detail == "Moving averages":
         ui.section("Moving averages", "Close with trailing 50- and 200-session means")
-        ui.chart(charts.moving_average_chart(hist, pal), key="rk_ma", config=PLOT_CONFIG)
+        ui.chart(charts.moving_average_chart(hist, pal), key="rk_ma")
         ui.note(
             "A moving-average line only begins once its full window exists, so the "
             "200-session average is absent for the first 200 sessions rather than "
@@ -739,12 +738,11 @@ def _history_ranked(ctx: Ctx, sym: str, version: str) -> None:
         left, right = st.columns(2)
         with left:
             ui.section("Trading volume")
-            ui.chart(charts.volume_bars(hist, pal), key="rk_vol",
-                     config=PLOT_CONFIG, controls=False)
+            ui.chart(charts.volume_bars(hist, pal), key="rk_vol")
         with right:
             ui.section("Daily returns")
             ui.chart(charts.returns_bars(hist.dropna(subset=["daily_return"]), pal),
-                     key="rk_ret", config=PLOT_CONFIG, controls=False)
+                     key="rk_ret")
 
     elif detail == "Growth & volatility":
         l2, r2 = st.columns(2)
@@ -754,7 +752,7 @@ def _history_ranked(ctx: Ctx, sym: str, version: str) -> None:
                 charts.area_series(hist, "cumulative_return", pal, color_key="blue",
                                    y_title="Cumulative", height=charts.H_COMPACT,
                                    label=ui.fmt_pct(hist["cumulative_return"].iloc[-1], 0)),
-                key="rk_cum", config=PLOT_CONFIG, controls=False,
+                key="rk_cum"
             )
         with r2:
             ui.section("Rolling volatility", "21-session, annualized")
@@ -766,7 +764,7 @@ def _history_ranked(ctx: Ctx, sym: str, version: str) -> None:
                                        label=ui.fmt_pct(cv["ann_volatility_21d"].iloc[-1], 0,
                                                         signed=False),
                                        zero_line=False),
-                    key="rk_vola", config=PLOT_CONFIG, controls=False,
+                    key="rk_vola"
                 )
 
     elif detail == "Drawdown":
@@ -782,7 +780,7 @@ def _history_ranked(ctx: Ctx, sym: str, version: str) -> None:
             font=dict(color=pal["text_primary"], size=11.5),
         )
         charts.add_events(fig_dd, pal, events.in_range(cs, ce), label=False)
-        ui.chart(fig_dd, key="rk_dd", config=PLOT_CONFIG, controls=False,
+        ui.chart(fig_dd, key="rk_dd",
                  caption=f"Measured from the running high since {first_rec:%b %Y} — "
                          "not an all-time high, because the record does not go back "
                          "that far")
