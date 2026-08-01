@@ -268,8 +268,8 @@ EXPLORER: dict[str, dict[str, object]] = {
         "indexes": ["idx_symbol_stats (symbol)"],
         "objects": ["symbol_stats (materialized)"],
         "powers": [
-            "Performance → Long-run performance table",
-            "Risk → Risk vs return scatter",
+            "Markets → Performance → Long-run performance table",
+            "Risk & Portfolio → Risk → Risk vs return scatter",
             "Developer Center → Performance benchmarks",
         ],
         "explain": (
@@ -300,9 +300,9 @@ EXPLORER: dict[str, dict[str, object]] = {
         "indexes": ["idx_prices_symbol_date (symbol, date)", "idx_prices_date (date)"],
         "objects": ["prices", "symbols"],
         "powers": [
-            "Market → Advancing / declining breadth",
-            "Market → Top gainer and worst decliner cards",
-            "Market → Movers table",
+            "Markets → Sectors & Movers → Advancing / declining breadth",
+            "Markets → Sectors & Movers → Top gainer and worst decliner cards",
+            "Markets → Sectors & Movers → Movers table",
         ],
         "explain": (
             "**What it does.** Ranks every company by its return *inside the selected "
@@ -326,7 +326,7 @@ EXPLORER: dict[str, dict[str, object]] = {
         "read_path_note": "Custom MEDIAN aggregate",
         "indexes": ["idx_prices_date (date)"],
         "objects": ["prices", "symbols"],
-        "powers": ["Market → Sector performance chart"],
+        "powers": ["Markets → Sectors & Movers → Sector performance chart"],
         "explain": (
             "**What it does.** Computes each company's return over the window, then "
             "aggregates to sector — reporting the **median** member return.\n\n"
@@ -352,8 +352,8 @@ EXPLORER: dict[str, dict[str, object]] = {
         "indexes": ["idx_prices_date (date)", "idx_prices_symbol_date (symbol, date)"],
         "objects": ["prices"],
         "powers": [
-            "Companies → Comparison chart",
-            "Companies → Indexed comparison table",
+            "Research → History → Comparison chart",
+            "Research → History → Indexed comparison table",
         ],
         "explain": (
             "**What it does.** Rebases every series to 100 at its first close inside the "
@@ -380,9 +380,8 @@ EXPLORER: dict[str, dict[str, object]] = {
         "indexes": ["idx_prices_symbol_date (symbol, date)"],
         "objects": ["prices", "daily_returns", "drawdowns"],
         "powers": [
-            "Overview → KPI row",
-            "Companies → Company metric cards",
-            "Risk → Risk metric cards",
+            "Markets → Index → KPI row",
+            "Research → History → Company metric cards",
         ],
         "explain": (
             "**What it does.** Returns the whole KPI row — period return, CAGR, high and "
@@ -408,7 +407,7 @@ EXPLORER: dict[str, dict[str, object]] = {
         "read_path_note": "Rolling frames, computed on read",
         "indexes": ["idx_prices_symbol_date (symbol, date)"],
         "objects": ["moving_averages (view)", "prices"],
-        "powers": ["Companies → Moving averages chart"],
+        "powers": ["Research → History → Moving averages chart"],
         "explain": (
             "**What it does.** Returns the closing price alongside its trailing 50- and "
             "200-session moving averages.\n\n"
@@ -433,7 +432,7 @@ EXPLORER: dict[str, dict[str, object]] = {
         "read_path_note": "Log-sum compounding",
         "indexes": ["idx_prices_symbol_date (symbol, date)"],
         "objects": ["daily_returns (view)"],
-        "powers": ["Companies → Cumulative return chart"],
+        "powers": ["Research → History → Cumulative return chart"],
         "explain": (
             "**What it does.** Compounds daily returns into a running growth curve "
             "starting at 0%.\n\n"
@@ -456,8 +455,7 @@ EXPLORER: dict[str, dict[str, object]] = {
         "indexes": ["idx_prices_symbol_date (symbol, date)"],
         "objects": ["rolling_volatility (view)", "daily_returns (view)"],
         "powers": [
-            "Companies → Rolling volatility chart",
-            "Risk → Rolling volatility chart",
+            "Research → History → Rolling volatility chart",
         ],
         "explain": (
             "**What it does.** Standard deviation of daily returns over a trailing "
@@ -481,8 +479,8 @@ EXPLORER: dict[str, dict[str, object]] = {
         "indexes": ["idx_prices_symbol_date (symbol, date)"],
         "objects": ["yearly_summary (view)", "prices"],
         "powers": [
-            "Performance → Calendar-year returns chart",
-            "Performance → Partial-year flagging",
+            "Markets → Performance → Calendar-year returns chart",
+            "Markets → Performance → Partial-year flagging",
         ],
         "explain": (
             "**What it does.** Per-year open, close, high, low, average volume and "
@@ -906,8 +904,8 @@ EXPLORER.update({
         "indexes": ["idx_prices_symbol_date (symbol, date)"],
         "objects": ["prices"],
         "powers": [
-            "Performance → Rolling returns chart",
-            "Performance → Ended-positive / best / worst / median cards",
+            "Markets → Performance → Rolling returns chart",
+            "Markets → Performance → Ended-positive / best / worst / median cards",
         ],
         "explain": (
             "**What it does.** Returns the annualized return of *every* holding period "
@@ -943,8 +941,8 @@ EXPLORER.update({
         "indexes": ["idx_prices_symbol_date (symbol, date)"],
         "objects": ["daily_returns (view)", "prices"],
         "powers": [
-            "Risk → Correlation matrix",
-            "Risk → Most / least correlated pair cards",
+            "Risk & Portfolio → Risk → Correlation matrix",
+            "Risk & Portfolio → Risk → Most / least correlated pair cards",
         ],
         "explain": (
             "**What it does.** Pearson correlation between every pair in a chosen set, "
@@ -1409,8 +1407,8 @@ EXPLORER.update({
         "indexes": ["idx_prices_symbol_date (symbol, date)"],
         "objects": ["prices"],
         "powers": [
-            "Stock Journey → the playhead KPI row",
-            "Stock Journey → the record-high state chip",
+            "Research → Journey → the playhead KPI row",
+            "Research → Journey → the record-high state chip",
         ],
         "explain": (
             "**What it does.** Returns one row describing where a company stood on "
@@ -1439,8 +1437,8 @@ EXPLORER.update({
         "indexes": ["idx_prices_symbol_date (symbol, date)"],
         "objects": ["prices"],
         "powers": [
-            "Stock Journey → drawdown bands on the price path",
-            "Stock Journey → recovery periods in Did You Know",
+            "Research → Journey → drawdown bands on the price path",
+            "Research → Journey → recovery periods in Did You Know",
         ],
         "explain": (
             "**What it does.** Returns one row per drawdown episode deeper than "
@@ -1475,7 +1473,7 @@ EXPLORER.update({
         "read_path_note": "Gaps-and-islands over daily direction",
         "indexes": ["idx_prices_symbol_date (symbol, date)"],
         "objects": ["daily_returns (view)", "prices"],
-        "powers": ["Stock Journey → Did You Know streak facts"],
+        "powers": ["Research → Journey → Did You Know streak facts"],
         "explain": (
             "**What it does.** Finds unbroken runs of up sessions (`:direction` = 1) or "
             "down sessions (-1), longest first, with the return earned across each run."
@@ -1500,8 +1498,8 @@ EXPLORER.update({
         "indexes": ["idx_company_events (symbol, date)", "idx_prices_symbol_date (symbol, date)"],
         "objects": ["company_events", "event_categories", "prices"],
         "powers": [
-            "Stock Journey → the historical timeline",
-            "Stock Journey → chart annotations",
+            "Research → Journey → the historical timeline",
+            "Research → Journey → chart annotations",
         ],
         "explain": (
             "**What it does.** Returns the curated events for a company up to `:asof`, "
@@ -1534,7 +1532,7 @@ EXPLORER.update({
         "read_path_note": "12 events, two correlated lookups each",
         "indexes": ["idx_prices_symbol_date (symbol, date)"],
         "objects": ["market_events", "prices"],
-        "powers": ["Stock Journey → market context on the timeline"],
+        "powers": ["Research → Journey → market context on the timeline"],
         "explain": (
             "**What it does.** Takes the 12 market-defining sessions and keeps only "
             "those where this company itself moved at least `:min_move` across the "
@@ -1606,6 +1604,143 @@ ORDER BY market_cap DESC NULLS LAST
 """
 INTEL_UNIVERSE_NOTE = (
     "The ranked universe with its size and liquidity, largest first."
+)
+
+# --------------------------------------------------------------------------
+# One company's recorded history from the WIDE universe.
+#
+# The core 50 have 25 years of daily bars in `prices`, and every derived series
+# the Research page draws comes from a view over that table. The other ~450
+# ranked companies have five years in `intel_prices` and no such views, so
+# without these two statements a reader who searched one of them saw an empty
+# state on Research -> History -- the app holding real data and declining to
+# draw it.
+#
+# The derived columns are computed here rather than in new views ON PURPOSE: the
+# ranking engine's schema is not something a presentation change should extend,
+# and one statement per read keeps the intel tables exactly as `fetch_intel.py`
+# and `build_db.py` leave them.
+#
+# Every expression is copied from the corresponding core view so the two records
+# MEAN the same thing: the 21-session volatility uses the same 21-row frame and
+# the same 252-session annualization, and the drawdown is measured from the
+# running high with the same unbounded frame. The one honest difference is the
+# record's LENGTH -- a "running high" over five years is not an all-time high --
+# which is why the page labels a fallback history rather than presenting it as
+# equivalent.
+# --------------------------------------------------------------------------
+INTEL_SYMBOL_HISTORY = """
+WITH base AS (
+    SELECT
+        date, open, high, low, close, volume,
+        (close - LAG(close) OVER w) / LAG(close) OVER w AS daily_return,
+        MAX(close) OVER (ORDER BY date
+                         ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS peak_close,
+        CASE WHEN COUNT(*) OVER w50  = 50  THEN AVG(close) OVER w50  END AS ma_50,
+        CASE WHEN COUNT(*) OVER w200 = 200 THEN AVG(close) OVER w200 END AS ma_200
+    FROM intel_prices
+    WHERE symbol = :symbol
+    WINDOW
+        w    AS (ORDER BY date),
+        w50  AS (ORDER BY date ROWS BETWEEN 49  PRECEDING AND CURRENT ROW),
+        w200 AS (ORDER BY date ROWS BETWEEN 199 PRECEDING AND CURRENT ROW)
+),
+vol AS (
+    SELECT date,
+           AVG(daily_return) OVER v                AS avg_ret,
+           AVG(daily_return * daily_return) OVER v AS avg_sq,
+           COUNT(*) OVER v                         AS n
+    FROM base
+    WHERE daily_return IS NOT NULL
+    WINDOW v AS (ORDER BY date ROWS BETWEEN 20 PRECEDING AND CURRENT ROW)
+),
+win AS (
+    SELECT b.date, b.open, b.high, b.low, b.close, b.volume, b.daily_return,
+           b.peak_close, b.ma_50, b.ma_200,
+           CASE WHEN v.n = 21
+                THEN SQRT(MAX(v.avg_sq - v.avg_ret * v.avg_ret, 0)) * SQRT(252)
+           END AS ann_volatility_21d
+    FROM base b
+    LEFT JOIN vol v ON v.date = b.date
+    WHERE b.date BETWEEN :start AND :end
+)
+SELECT date, open, high, low, close, volume, daily_return,
+       ma_50, ma_200, ann_volatility_21d,
+       (close - peak_close) / peak_close AS drawdown,
+       close / (SELECT close FROM win ORDER BY date LIMIT 1) - 1.0 AS cumulative_return
+FROM win
+ORDER BY date
+"""
+INTEL_SYMBOL_HISTORY_NOTE = (
+    "Five years of daily bars for one company in the wide ranking universe, with "
+    "the same derived series the core universe gets from its views: daily return, "
+    "50- and 200-session moving averages, 21-session annualized volatility, "
+    "drawdown from the running high, and cumulative return rebased to the "
+    "window's first session."
+)
+
+INTEL_SYMBOL_WINDOW_STATS = """
+WITH win AS (
+    SELECT * FROM intel_prices
+    WHERE symbol = :symbol AND date BETWEEN :start AND :end
+),
+bounds AS (
+    SELECT MIN(date) AS first_date, MAX(date) AS last_date, COUNT(*) AS trading_days
+    FROM win
+),
+r AS (
+    SELECT AVG(dr) AS mean_ret, AVG(dr * dr) AS mean_sq, COUNT(*) AS n
+    FROM (
+        SELECT date,
+               (close - LAG(close) OVER (ORDER BY date))
+                   / LAG(close) OVER (ORDER BY date) AS dr
+        FROM intel_prices WHERE symbol = :symbol
+    )
+    WHERE dr IS NOT NULL AND date BETWEEN :start AND :end
+),
+dd AS (
+    SELECT MIN((close - peak_close) / peak_close) AS max_drawdown
+    FROM (
+        SELECT date, close,
+               MAX(close) OVER (ORDER BY date
+                                ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS peak_close
+        FROM intel_prices WHERE symbol = :symbol
+    )
+    WHERE date BETWEEN :start AND :end
+)
+SELECT
+    b.first_date, b.last_date, b.trading_days,
+    fo.close AS first_close,
+    lc.close AS last_close,
+    (lc.close - fo.close) / fo.close AS period_return,
+    (SELECT MAX(high)   FROM win) AS period_high,
+    (SELECT MIN(low)    FROM win) AS period_low,
+    (SELECT MAX(close)  FROM win) AS highest_close,
+    (SELECT MIN(close)  FROM win) AS lowest_close,
+    (SELECT AVG(volume) FROM win) AS avg_volume,
+    (SELECT AVG(close * volume) FROM win) AS avg_dollar_volume,
+    SQRT(MAX(r.mean_sq - r.mean_ret * r.mean_ret, 0)) * SQRT(252) AS ann_volatility,
+    dd.max_drawdown,
+    POWER(lc.close / fo.close,
+          1.0 / MAX((julianday(b.last_date) - julianday(b.first_date)) / 365.25, 0.01)) - 1 AS cagr
+FROM bounds b, r, dd, win fo, win lc
+WHERE fo.date = b.first_date AND lc.date = b.last_date
+"""
+INTEL_SYMBOL_WINDOW_STATS_NOTE = (
+    "The same window summary the core universe gets from WINDOW_STATS -- return, "
+    "CAGR, high, low, volatility, max drawdown -- computed over intel_prices for "
+    "a company outside the 50-symbol core. Returns no row when the window holds "
+    "no session, which is what the page tests before it draws anything."
+)
+
+INTEL_SYMBOL_BOUNDS = """
+SELECT MIN(date) AS first_date, MAX(date) AS last_date, COUNT(*) AS sessions
+FROM intel_prices WHERE symbol = :symbol
+"""
+INTEL_SYMBOL_BOUNDS_NOTE = (
+    "How much recorded history the wide universe actually holds for one company. "
+    "The page states the span rather than implying the five-year record is the "
+    "company's whole life."
 )
 
 

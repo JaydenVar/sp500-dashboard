@@ -262,6 +262,40 @@ hr {{ border-color: var(--border); margin: 1.25rem 0; }}
 }}
 .note {{ font-size: 0.75rem; color: var(--muted); line-height: 1.5; }}
 
+/* ---------- detail cards ----------
+   One surface, one border, one spacing scale for every label/value panel in the
+   app. These began life scoped to the Intelligence page, which is exactly why
+   that page read tighter than the rest -- so they are global now and reached
+   through `ui.card()` / `ui.metric_rows()`. Every color is a palette variable
+   that already passed the contrast and color-vision validation. */
+.mi-card {{
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 10px; padding: .85rem 1rem; margin-bottom: .6rem;
+}}
+.mi-card h4 {{ margin: 0 0 .35rem 0; font-size: .95rem; color: var(--text-1); }}
+.mi-metric {{
+  display: flex; justify-content: space-between; gap: 1rem;
+  padding: .3rem 0; border-bottom: 1px solid var(--border); font-size: .9rem;
+}}
+.mi-metric:last-child {{ border-bottom: none; }}
+.mi-metric .k {{ color: var(--text-2); }}
+.mi-metric .v {{ color: var(--text-1); font-weight: 600; font-variant-numeric: tabular-nums; }}
+.mi-pct {{ font-size: .78rem; color: var(--text-2); margin-left: .4rem; }}
+.mi-bar {{
+  height: 6px; border-radius: 3px; background: var(--surface-2);
+  overflow: hidden; margin-top: .25rem;
+}}
+.mi-bar > span {{ display: block; height: 100%; border-radius: 3px; }}
+.mi-chip {{
+  display: inline-block; min-width: 2.4rem; text-align: center;
+  padding: .12rem .45rem; border-radius: 6px; font-weight: 700; font-size: .86rem;
+}}
+.mi-news {{ padding: .45rem 0; border-bottom: 1px solid var(--border); }}
+.mi-news:last-child {{ border-bottom: none; }}
+.mi-news a {{ color: var(--text-1); text-decoration: none; font-weight: 600; font-size: .9rem; }}
+.mi-news a:hover {{ color: var(--accent); text-decoration: underline; }}
+.mi-news .src {{ color: var(--text-2); font-size: .78rem; margin-top: .15rem; }}
+
 /* ---------- tabs ---------- */
 .stTabs [data-baseweb="tab-list"] {{
   gap: 2px; border-bottom: 1px solid var(--border);
@@ -305,6 +339,35 @@ hr {{ border-color: var(--border); margin: 1.25rem 0; }}
   color: var(--accent) !important; font-weight: 680 !important;
 }}
 .st-key-section div[role="radiogroup"] > label p {{ font-size: 0.88rem !important; }}
+
+/* ---------- sub-navigation, one level down ----------
+   Keyed `sub_<page>` by `ui.sub_nav`, matched here on the key PREFIX so a new
+   page needs no new rule. Deliberately lighter than the section nav above it:
+   a filled segment on a recessed track rather than an underlined tab, so a
+   reader can tell at a glance which row is the page and which is the view.
+   Without the contrast the two rows compete and the hierarchy disappears. */
+div[class*="st-key-sub_"] div[role="radiogroup"] {{
+  background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: 9px; padding: 3px; gap: 2px !important;
+  display: inline-flex; margin: 10px 0 4px;
+}}
+div[class*="st-key-sub_"] div[role="radiogroup"] > label {{
+  background: transparent !important; border: none !important;
+  border-radius: 7px !important; padding: 5px 15px !important;
+}}
+div[class*="st-key-sub_"] div[role="radiogroup"] > label:hover {{
+  background: var(--hover) !important; transform: none !important;
+}}
+div[class*="st-key-sub_"] div[role="radiogroup"] > label:has(input:checked) {{
+  background: var(--surface) !important;
+  border: 1px solid var(--border-strong) !important;
+  padding: 4px 14px !important;  /* the border eats a pixel on each side */
+  box-shadow: var(--shadow);
+}}
+div[class*="st-key-sub_"] div[role="radiogroup"] > label:has(input:checked) p {{
+  color: var(--accent) !important; font-weight: 660 !important;
+}}
+div[class*="st-key-sub_"] div[role="radiogroup"] > label p {{ font-size: 0.815rem !important; }}
 
 /* ---------- radios as Yahoo-style pills ---------- */
 div[role="radiogroup"] {{ gap: 5px !important; flex-wrap: wrap; }}

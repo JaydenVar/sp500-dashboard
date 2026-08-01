@@ -39,16 +39,16 @@ top-right.
 **User Mode** — a financial application. No SQL, schemas or query timings appear
 anywhere.
 
-| Section | What's in it |
+Five pages, each answering one question. Every page carries its own
+sub-navigation.
+
+| Page | What's in it |
 |---|---|
-| **Overview** | *Ask the Market* search, index quote, KPIs, price with market events, volume |
-| **Market** | Breadth, sector performance, full movers table |
-| **Companies** | Ticker/name search, company page, price, moving averages, volume, returns, cumulative return, volatility, drawdown, and multi-metric comparison |
-| **Journey** | *Stock Journey* — travel through one company's whole history with playback, a live timeline and "Did you know?" facts |
-| **Performance** | Long-run leaderboard, calendar-year returns, monthly seasonality |
-| **Risk** | Drawdown curve, rolling volatility, risk-vs-return scatter |
-| **Portfolio** | Weighted basket simulator with return, CAGR, volatility and drawdown |
-| **About** | What the metrics mean and the limitations that affect reading them |
+| **Research** *(landing)* | One search box for **any** US-listed stock, *Ask the Market* directly beneath it, and **Today's Opportunities** — the ranking engine's top names, clickable straight into the panel below. Then: **Snapshot** (live quote, interactive chart, profile, SEC financials, valuation, analyst consensus, trailing performance, news) · **History** (price, moving averages, volume, daily returns, cumulative return, rolling volatility, drawdown, multi-metric peer comparison) · **Journey** (travel through one company's whole history with playback, a live timeline and "Did you know?" facts) |
+| **Intelligence** | The ranking engine: ~500 US stocks scored on 33 objective metrics over three horizons, filterable by risk, objective, sector and market cap, with category scores, strengths, risks, a full metric breakdown and the generated SQL |
+| **Markets** | **Index** (index quote, KPIs, price with market events, volume) · **Sectors & Movers** (breadth, sector performance, full movers table) · **Performance** (long-run leaderboard, calendar-year returns, rolling returns, monthly seasonality) |
+| **Risk & Portfolio** | **Risk** (correlation matrix and risk-vs-return scatter — cross-sectional, no picker) · **Portfolio** (weighted basket simulator with return, CAGR, volatility, drawdown, allocation and return contribution) |
+| **About** | What the metrics mean, which of the two universes a figure came from, and the limitations that affect reading them |
 
 **Developer Center** — everything technical, organized for someone evaluating
 the engineering: Overview, Project Architecture, Database Schema, SQL Explorer,
@@ -146,22 +146,47 @@ charts.py       Plotly builders + one shared styling function
 components.py   header, KPI cards, quote strip, chart + table helpers
 events.py       market timeline events with hover explanations
 journey.py      Stock Journey narrative layer — picks and phrases facts, no math
-market_intel.py Market Intelligence page — research panel + ranking board
+market_intel.py the ranking board, and the top picks the landing page shows
+pagectx.py      the frozen per-run context every page module receives
+research.py     PAGE: search + Ask, then Snapshot / History / Journey
+markets.py      PAGE: Index / Sectors & Movers / Performance
+riskfolio.py    PAGE: Risk / Portfolio
+about.py        PAGE: what the numbers mean
 ask.py          natural-language intent routing (no LLM)
 answers.py      renders an answer per intent from existing queries
 devcenter.py    the Developer Center, incl. SQL Explorer and Interview Mode
 theme.py        validated palettes and the whole stylesheet
-app.py          layout and interaction only — no analysis
+app.py          chrome only — theme, navigation, the shared window, five calls
 ```
 
+**One page, one module.** `app.py` used to hold every section inline at 1,538
+lines, which meant a change to one page could break any other. It is now ~320
+lines that resolve the theme, the company directory and the shared date window,
+build the navigation and dispatch. Each page module declares its own `VIEWS` and
+its own `WINDOWED` tuple — the views that actually read the shared window — so
+the window control appears exactly where it applies and cannot fall out of date.
+
+### Research — any US-listed company
+
+One search box resolves any stock on NYSE, Nasdaq or NYSE American — not just
+the 50 in the core universe. It checks the local catalog first (the core 50 plus
+the ~500 ranked names), so the common case answers from SQLite in under a
+millisecond rather than a network round trip per keystroke, and falls through to
+the provider for anything else.
+
+**Snapshot** is live: quote, an interactive chart across eight spans, the company
+profile, key financials from SEC filings, valuation, trailing performance and
+recent headlines.
+
+**History** is the recorded daily record. The core 50 carry 25 years; the rest of
+the ranked universe carries five, computed with the same metric definitions, and
+the shorter record is labelled with its actual span rather than presented as
+equivalent — a "max drawdown" over five years is a different statement from one
+over twenty-five.
+
+**Journey** replays a company's whole record forward in time under a cursor.
+
 ### Market Intelligence
-
-Two things on one page.
-
-**Live company research** works for any US-listed stock on NYSE, Nasdaq or NYSE
-American — not just the 50 in the core universe. Search by ticker or name, then
-a live quote, an interactive chart across eight spans, the company profile,
-key financials from SEC filings, valuation, performance and recent headlines.
 
 **The intelligence engine** ranks the wide universe on objective metrics across
 three horizons, filterable by risk tolerance, investment objective, sector and
@@ -270,13 +295,29 @@ contrast against that theme's surface. Identity never rests on color alone —
 multi-series charts carry a legend, direction chips pair an arrow with the color,
 and every chart has a table view or CSV export.
 
+**One date window for the whole app, and its control appears only where it
+applies.** A single window means moving between pages keeps every figure
+describing the same period, which is what makes reading across them trustworthy.
+Independent per-page pickers were considered and rejected: they turn each
+navigation into a silent re-baselining. What the control must not do is claim a
+reach it lacks, so it is hidden on views that set their own period — Snapshot has
+its own span control, a Journey is the company's whole record by construction,
+Performance is all-time, and the ranking engine scores fixed trailing windows.
+The banner names the view it is scoping right now, or says plainly that this one
+sets its own.
+
+**Navigation is a radio, never tabs** — at both levels. `st.tabs` renders every
+tab's body on every rerun, so it would run all of a page's queries when one view
+is visible and make Plotly measure charts inside hidden containers, rendering
+them at a fraction of the container width.
+
 ## Honest limits
 
 Things this data genuinely cannot support, stated rather than papered over:
 
 - **Price returns, not total returns.** Dividends are excluded, so long-run
   figures understate what a shareholder actually earned.
-- **Market cap exists only on the Intelligence page.** It needs share counts, and
+- **Market cap comes from the ranked universe only.** It needs share counts, and
   every *Yahoo* endpoint serving them is auth-gated (401). SEC EDGAR serves them
   from the filings themselves, so the intelligence universe computes cap as
   shares outstanding × latest close on every rebuild. The core 50-symbol pages
@@ -302,7 +343,7 @@ Things this data genuinely cannot support, stated rather than papered over:
   whose coverage they cannot meet, rather than being scored as if unlevered.
 - **Unequal histories.** Symbols listed later (META 2012, TSLA 2010) have shorter
   records, so all-time leaderboards show `Years` and `From` instead of silently
-  ranking unequal periods. Use the Market tab for like-for-like window returns.
+  ranking unequal periods. Use Markets → Sectors & Movers for like-for-like window returns.
 - **Sectors are equal-weighted**, not market-cap-weighted, for the same reason.
 - **Survivorship bias.** The universe is a fixed list of companies that exist
   today, omitting firms that failed or were acquired — which flatters long-run

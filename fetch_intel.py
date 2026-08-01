@@ -86,7 +86,7 @@ def build_universe() -> list[dict]:
 
     The curated 50 from `universe.py` are force-included regardless of where the
     frames screen puts them, so the intelligence page always covers at least the
-    names the rest of the app already discusses -- a stock on the Companies page
+    names the rest of the app already discusses -- a stock on the Research page
     that is missing from the ranking board reads as a bug.
     """
     print("Fetching SEC ticker map...")

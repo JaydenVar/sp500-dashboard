@@ -150,6 +150,111 @@ def note_md(text: str) -> None:
     st.caption(text)
 
 
+# ---------------------------------------------------------------------------
+# Widget-key hygiene
+#
+# `st.radio` and `st.selectbox` RAISE when `session_state[key]` holds a value
+# that is not in `options`, and `st.multiselect` does the same for any element of
+# its stored list. Both happen routinely here for two reasons:
+#
+# * a browser session survives a Streamlit Cloud hot-update, so it can still hold
+#   a section name, sub-view or preset label that the new code no longer offers;
+# * several option lists are computed per run (search matches, the sectors that
+#   have rows, the companies on the current board) and legitimately shrink.
+#
+# The result is an app that was working a moment ago raising
+# `StreamlitAPIException` on the next click. These clear the stale value first.
+#
+# BOTH MUST RUN BEFORE THE WIDGET IS INSTANTIATED. Streamlit forbids writing a
+# widget's key only *after* that widget exists in the current run -- which is the
+# same rule the Ask suggestion chips and the Journey cursor are arranged around.
+# ---------------------------------------------------------------------------
+def select_guard(key: str, options) -> None:
+    """Drop a stored single choice that is no longer offered."""
+    if key in st.session_state and st.session_state[key] not in options:
+        del st.session_state[key]
+
+
+def multiselect_guard(key: str, options) -> None:
+    """Keep the still-valid choices in a stored multiselect, drop the rest.
+
+    Clearing the whole selection would throw away a reader's other picks because
+    one of them stopped being offered.
+    """
+    stored = st.session_state.get(key)
+    if stored is None:
+        return
+    kept = [v for v in stored if v in options]
+    if len(kept) != len(stored):
+        st.session_state[key] = kept
+
+
+def sub_nav(page: str, options, *, default: str | None = None) -> str:
+    """The second-level navigation inside a page.
+
+    A radio, never `st.tabs` -- for the same reason the top-level nav refuses
+    tabs: `st.tabs` renders EVERY tab body on every rerun, so it would run all of
+    a page's queries when one view is visible and make Plotly measure charts
+    inside hidden containers. Rendering only the active view fixes both.
+
+    Keyed per page (`sub_<page>`) so each page remembers its own view, and styled
+    as a lighter segmented control by `theme.app_css` so the hierarchy against the
+    top-level nav is visible at a glance.
+    """
+    opts = list(options)
+    key = f"sub_{page}"
+    select_guard(key, opts)
+    start = opts.index(default) if default in opts else 0
+    return st.radio(page, opts, index=start, horizontal=True, key=key,
+                    label_visibility="collapsed")
+
+
+# ---------------------------------------------------------------------------
+# Cards
+#
+# Promoted out of `market_intel.py`, where they were introduced and where they
+# made that one page read tighter than the rest of the app *because* nothing else
+# had them. One surface, one border and one spacing scale everywhere is the point
+# -- the `.mi-` class names are kept because the palette-derived rules in
+# `theme.app_css` already passed the contrast and color-vision validation under
+# those names.
+# ---------------------------------------------------------------------------
+def metric_rows(rows) -> str:
+    """Label/value pairs as card body HTML. Both sides are escaped."""
+    return "".join(
+        f'<div class="mi-metric"><span class="k">{esc(k)}</span>'
+        f'<span class="v">{esc(v)}</span></div>' for k, v in rows)
+
+
+def card(title: str, rows) -> None:
+    """A titled card of label/value rows -- the app's standard detail panel."""
+    st.markdown(f'<div class="mi-card"><h4>{esc(title)}</h4>'
+                f'{metric_rows(rows)}</div>', unsafe_allow_html=True)
+
+
+def fmt_metric(value, kind: str) -> str:
+    """One formatter for every ranking metric, driven by the registry's `fmt`.
+
+    Centralised because the same metric is printed in six places (the board, the
+    breakdown, strengths, risks, the valuation card, the financials card) and a
+    ratio that renders as a percentage in one of them is the kind of
+    inconsistency that makes a reader stop trusting the page.
+    """
+    if value is None or (isinstance(value, float) and value != value):
+        return "—"
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if kind == "pct":
+        return f"{v:+.1%}" if abs(v) < 100 else f"{v:,.0f}"
+    if kind == "money":
+        return fmt_dollar_compact(v)
+    if kind == "ratio":
+        return f"{v:,.2f}x"
+    return f"{v:,.2f}"
+
+
 # `kind` -> (css modifier, default icon). Severity is carried by the icon and the
 # wording as well as the rule color, so it survives a reader who can't separate
 # the two hues.

@@ -2,39 +2,40 @@
 
 Two deliberately separate experiences share this entry point:
 
-* **User Mode** (default) is the financial product. It shows markets, companies,
-  performance and risk, and never surfaces SQL, schemas, timings or any other
-  implementation detail -- mixing those into an end-user screen is what makes an
-  application read as a class project rather than a product.
+* **User Mode** (default) is the financial product. It shows one company's
+  research, the ranking engine, the market, risk and portfolios, and never
+  surfaces SQL, schemas, timings or any other implementation detail -- mixing
+  those into an end-user screen is what makes an application read as a class
+  project rather than a product.
 * **Developer Center** (see devcenter.py) is where all of that technical material
   lives, organized for someone evaluating the engineering.
 
 Underneath both: every figure on screen is the output of a SQL query
 (see queries.py) against a SQLite database whose analysis lives in views and
-materialized rollups (see build_db.py). This module lays out and draws; it
-computes no metrics of its own.
+materialized rollups (see build_db.py).
+
+**This module lays out chrome and nothing else.** It resolves the theme, the
+directory and the shared date window, builds the navigation, and dispatches to
+one page module (`research`, `market_intel`, `markets`, `riskfolio`, `about`).
+It draws no figure and computes no metric. It used to hold every section inline
+at 1,500 lines, which meant a change to one page risked every other one.
 """
 
 from __future__ import annotations
 
 import datetime as dt
 
-import pandas as pd
 import streamlit as st
 
-import answers
-import ask
-import charts
+import about
 import components as ui
 import data_access as dal
 import devcenter
-import events
-import journey
 import market_intel
-import nlq
-import queries
-import router
-from charts import PLOT_CONFIG
+import markets
+import research
+import riskfolio
+from pagectx import Ctx
 from theme import PALETTES, app_css
 from universe import INDEX_SYMBOL
 
@@ -45,8 +46,6 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
-
 # Date presets. Value is (label -> lookback in days | sentinel).
 PRESETS: dict[str, object] = {
     "1M": 30, "3M": 91, "6M": 182, "YTD": "ytd",
@@ -56,59 +55,43 @@ PRESETS: dict[str, object] = {
 DEFAULT_PRESET = "All Time"
 CUSTOM_PRESET = "Custom Range"
 
-# The sections that actually read the window. Performance is all-time by
-# construction (each symbol over its own listed history, calendar-year returns,
-# seasonality) and About states no figures at all -- so the control row must not
-# claim to scope them. The window is deliberately shared by the rest: moving
-# between Market and Companies keeps every figure describing the same period,
-# which is what makes reading across sections trustworthy.
-WINDOWED_SECTIONS = ("Overview", "Market", "Companies", "Risk", "Portfolio")
+# Five pages, each answering one question. Nine wrapped onto two rows on a
+# laptop, and three of them were about the same subject behind three separate
+# company pickers.
+USER_SECTIONS = ["Research", "Intelligence", "Markets", "Risk & Portfolio", "About"]
+DEFAULT_SECTION = "Research"
 
-# Two entirely separate experiences. User Mode never shows SQL, schemas, timings
-# or implementation detail -- mixing those into an end-user screen is what makes
-# an app read as a class project rather than a product.
+# ---------------------------------------------------------------------------
+# THE SHARED DATE WINDOW.
 #
-# Defined up here, beside WINDOWED_SECTIONS, so the scope banner can DERIVE the
-# always-all-time list instead of naming it in prose. It previously read
-# "Performance and About", which silently became wrong the moment a third
-# all-time section was added.
-USER_SECTIONS = ["Overview", "Market", "Companies", "Journey",
-                 "Performance", "Risk", "Portfolio", "Intelligence", "About"]
-ALLTIME_SECTIONS = tuple(s for s in USER_SECTIONS if s not in WINDOWED_SECTIONS
-                         and s != "About")
-
-# Stock Journey playback. `JOURNEY_STEPS` is calendar days advanced per tick --
-# a journey is 25 years long, so a step of one session would take 40 minutes to
-# play through and nobody would watch it.
-JOURNEY_STEPS: dict[str, int] = {"Slow": 20, "Medium": 60, "Fast": 150}
-JOURNEY_DEFAULT_SPEED = "Medium"
-JOURNEY_TICK = 0.4  # seconds between playback frames
-
-# Keep every 3rd session. 6,300 points is far more than a 380px chart can
-# resolve, and the Journey redraws on every playback frame rather than once per
-# page load. The query keeps all record highs regardless of the stride, so
-# thinning cannot make the all-time-high line cut below the price it bounds.
-JOURNEY_STRIDE = 3
-# Only drawdowns worth narrating. Below ~15% a long record produces dozens of
-# episodes and the timeline becomes noise rather than a story.
-JOURNEY_MIN_DRAWDOWN = -0.15
-# Sessions over which an event's effect is measured. One session is too tight
-# (news after the close lands on the next day) and a month stops being about
-# the event at all.
-JOURNEY_EVENT_SESSIONS = 5
-# How much THIS company must have moved for a market-wide event to appear on
-# its timeline. See the JOURNEY_MARKET_EVENT_IMPACT comment in queries.py.
-JOURNEY_MIN_MOVE = 0.05
-
-# Rolling-return horizons, as SESSION counts (~252 trading days a year). A
-# holding-period length, not a date filter: it selects how long each period is,
-# while the record swept stays the symbol's full history.
-ROLLING_HORIZONS: dict[str, int] = {"1Y": 252, "3Y": 756, "5Y": 1260, "10Y": 2520}
-
-# Opening set for the correlation matrix: four names from four different sectors,
-# so the first render shows a range of coefficients rather than one cluster near
-# 1.0 that makes the chart look broken.
-CORR_DEFAULT = ("AAPL", "JPM", "XOM", "JNJ")
+# One value, resolved once, for the whole app: moving between pages keeps every
+# figure describing the same period, which is what makes reading across them
+# trustworthy. That is a twice-defended decision and it has not changed.
+#
+# What IS new is that the control only appears where the active view reads it.
+# A window control sitting above the Journey, or above Snapshot's live 1D chart,
+# claims a reach it does not have -- and a control that overstates its reach
+# makes a reader distrust the pages it really does govern.
+#
+# THIS IS NOT THE PER-SECTION DATE FILTER THAT WAS REJECTED TWICE. That proposal
+# was several independent windows, one per page, each free to re-baseline a
+# figure another page also showed. This is one window whose control is hidden
+# where it would do nothing. The distinction is the whole design, so it is
+# stated here rather than left for a future reader to rediscover.
+#
+# Each page module owns the list, next to the views themselves, so adding a view
+# cannot leave this out of date.
+# ---------------------------------------------------------------------------
+WINDOWED_VIEWS: dict[str, tuple[str, ...]] = {
+    "Research": research.WINDOWED,
+    "Markets": markets.WINDOWED,
+    "Risk & Portfolio": riskfolio.WINDOWED,
+}
+PAGE_VIEWS: dict[str, tuple[str, ...]] = {
+    "Research": research.VIEWS,
+    "Markets": markets.VIEWS,
+    "Risk & Portfolio": riskfolio.VIEWS,
+}
 
 
 def resolve_range(preset: str, min_d: dt.date, max_d: dt.date) -> tuple[dt.date, dt.date]:
@@ -140,7 +123,7 @@ def custom_window(min_d: dt.date, max_d: dt.date) -> tuple[dt.date, dt.date]:
     Both fields are bounded by the data, so the failure a reader can actually
     produce is a reversed pair -- and SQLite answers `BETWEEN '2020' AND '2010'`
     with zero rows, which would surface as "No data in the selected window" on
-    every section at once: an input error wearing the costume of a data gap. It
+    every page at once: an input error wearing the costume of a data gap. It
     is caught here instead, and the last valid window is held.
     """
     last_ok = st.session_state.get("custom_window", (min_d, max_d))
@@ -171,14 +154,19 @@ def custom_window(min_d: dt.date, max_d: dt.date) -> tuple[dt.date, dt.date]:
     return picked_s, picked_e
 
 
-def use_example(text: str) -> None:
-    """Load a suggestion chip into the Ask box.
+def active_view(section: str) -> str:
+    """The sub-view a page will open on, read BEFORE that page renders.
 
-    Streamlit refuses writes to a widget's key once that widget has been
-    instantiated this run, so this has to run as the button's on_click --
-    callbacks fire before the rerun, while the text_input does not yet exist.
+    The window control has to know whether the view about to be drawn reads the
+    window, but the sub-nav radio lives inside the page and is built after this
+    row. Reading the stored key is safe -- it is a read, and `ui.sub_nav` falls
+    back to the same default when nothing is stored.
     """
-    st.session_state.ask_q = text
+    views = PAGE_VIEWS.get(section)
+    if not views:
+        return ""
+    stored = st.session_state.get(f"sub_{section}")
+    return stored if stored in views else views[0]
 
 
 # ---------------------------------------------------------------------------
@@ -202,21 +190,16 @@ ui.header(
 )
 
 # ---------------------------------------------------------------------------
-# Control row — one row, above everything it scopes
+# Navigation — the page radio comes FIRST, because what the control row shows
+# depends on which page is active.
+#
+# Deliberately a radio, not st.tabs. st.tabs renders EVERY tab's body on every
+# rerun, which (a) runs all pages' queries when only one is visible and (b) makes
+# Plotly measure charts inside hidden tabs, so they render at a fraction of the
+# container width. Rendering only the active page fixes both.
 # ---------------------------------------------------------------------------
-ctl = st.columns([4.0, 1.5, 1.9])
-with ctl[0]:
-    # Drop a stored preset that is no longer offered before the widget is built.
-    # st.radio raises on a session_state value outside its options, and a session
-    # that survived a hot-update can still hold the old "MAX" label. Writing a
-    # widget key is only forbidden AFTER the widget exists -- here it does not yet.
-    if "preset" in st.session_state and st.session_state["preset"] not in PRESETS:
-        del st.session_state["preset"]
-    preset = st.radio(
-        "Date range", list(PRESETS), index=list(PRESETS).index(DEFAULT_PRESET),
-        horizontal=True, key="preset", label_visibility="collapsed",
-    )
-with ctl[1]:
+nav = st.columns([4.6, 1.5, 1.9])
+with nav[1]:
     theme_choice = st.radio(
         "Theme", ["Light", "Dark"], horizontal=True, label_visibility="collapsed",
         index=0 if st.session_state.theme == "Light" else 1, key="theme_pick",
@@ -224,7 +207,7 @@ with ctl[1]:
     if theme_choice != st.session_state.theme:
         st.session_state.theme = theme_choice
         st.rerun()
-with ctl[2]:
+with nav[2]:
     mode = st.radio(
         "Mode", ["User", "Developer"], horizontal=True, key="mode",
         label_visibility="collapsed",
@@ -232,1307 +215,103 @@ with ctl[2]:
     )
 
 DEV = mode == "Developer"
+options = devcenter.SECTIONS if DEV else USER_SECTIONS
+nav_key = "dev_section" if DEV else "section"
+
+# A browser session that survived a hot-update can still be holding a page name
+# this build no longer offers ("Companies", "Overview"), and `st.radio` RAISES on
+# a stored value outside its options -- so the first load after this ships would
+# be a stack trace rather than a page. Cleared before the widget exists, which is
+# the only point Streamlit allows a widget key to be written.
+ui.select_guard(nav_key, options)
+with nav[0]:
+    section = st.radio("Section", options, horizontal=True, key=nav_key,
+                       label_visibility="collapsed")
+
+view = "" if DEV else active_view(section)
+
+# ---------------------------------------------------------------------------
+# Control row — the date window, shown only where it reaches
+# ---------------------------------------------------------------------------
+# `preset` is a widget key, and Streamlit DISCARDS widget state for a widget that
+# did not render this run. Since the control is now conditional, the chosen
+# preset is mirrored into a plain key that survives a visit to a page without
+# the control -- otherwise navigating to Snapshot and back would silently reset
+# a reader's 5Y window to the default.
+if st.session_state.get("preset") in PRESETS:
+    st.session_state["preset_value"] = st.session_state["preset"]
+stored_preset = st.session_state.get("preset_value", DEFAULT_PRESET)
+if stored_preset not in PRESETS:
+    stored_preset = DEFAULT_PRESET
+
+show_window = DEV or view in WINDOWED_VIEWS.get(section, ())
+
+if show_window:
+    ui.select_guard("preset", PRESETS)
+    preset = st.radio(
+        "Date range", list(PRESETS), index=list(PRESETS).index(stored_preset),
+        horizontal=True, key="preset", label_visibility="collapsed",
+    )
+    st.session_state["preset_value"] = preset
+else:
+    preset = stored_preset
 
 index_min, index_max = dal.date_bounds(INDEX_SYMBOL)
-if preset == CUSTOM_PRESET:
+if preset == CUSTOM_PRESET and show_window:
     start_d, end_d = custom_window(index_min, index_max)
+elif preset == CUSTOM_PRESET:
+    start_d, end_d = st.session_state.get("custom_window", (index_min, index_max))
 else:
     start_d, end_d = resolve_range(preset, index_min, index_max)
 START, END = start_d.isoformat(), end_d.isoformat()
 
-# Name the sections this window reaches. It previously read "scopes every section
-# below", which was false for two of the seven: Performance is all-time and About
-# has no figures to scope. A control that overstates its reach makes a reader
-# distrust the ones it does govern.
-_named = f"{', '.join(WINDOWED_SECTIONS[:-1])} and {WINDOWED_SECTIONS[-1]}"
-_alltime = f"{' and '.join(ALLTIME_SECTIONS)}" if len(ALLTIME_SECTIONS) < 3 else (
-    f"{', '.join(ALLTIME_SECTIONS[:-1])} and {ALLTIME_SECTIONS[-1]}")
-# "are always all-time" was accurate while every unwindowed section really was
-# all-time. Intelligence is not: it ranks on fixed trailing windows (1y
-# volatility, 12-1 momentum, TTM fundamentals), which is neither the shared
-# window nor all-time. Saying "all-time" would misdescribe it in exactly the way
-# the comment above warns about, so the banner now states only what it governs.
-scope_note = (
-    "seeds the SQL Explorer window" if DEV
-    else f"applies to {_named} · not to {_alltime} or About"
-)
+# The banner states what the window is scoping RIGHT NOW, by name. It used to
+# name a fixed list of sections, which silently became wrong the moment a new
+# section was added -- so it is derived, and where the window does not reach it
+# says so instead of quoting dates the page beside it ignores.
+here = f"{ui.esc(section)}{f' → {ui.esc(view)}' if view else ''}"
+if DEV:
+    scope = (f'Window <b>{start_d:%b %d, %Y}</b> → <b>{end_d:%b %d, %Y}</b>'
+             f' · {ui.esc(preset)} · seeds the SQL Explorer window')
+elif show_window:
+    scope = (f'Window <b>{start_d:%b %d, %Y}</b> → <b>{end_d:%b %d, %Y}</b>'
+             f' · {ui.esc(preset)} · scoping {here}')
+else:
+    scope = (f'{here} sets its own period — the shared date window does not '
+             f'reach it, so its control is hidden rather than shown above '
+             f'figures it would not change')
 st.markdown(
     f'<div class="note">'
     f'<span class="modepill{" dev" if DEV else ""}">'
     f'{"◆ Developer Center" if DEV else "● User Mode"}</span>'
-    f'&nbsp;&nbsp;Window <b>{start_d:%b %d, %Y}</b> → <b>{end_d:%b %d, %Y}</b>'
-    f' · {preset} · {scope_note}</div>',
+    f'&nbsp;&nbsp;{scope}</div>',
     unsafe_allow_html=True,
 )
 
-# Deliberately a radio, not st.tabs. st.tabs renders EVERY tab's body on every
-# rerun, which (a) runs all sections' queries when only one is visible and
-# (b) makes Plotly measure charts inside hidden tabs, so they render at a
-# fraction of the container width. Rendering only the active section fixes both.
-section = st.radio(
-    "Section", devcenter.SECTIONS if DEV else USER_SECTIONS,
-    horizontal=True, key="dev_section" if DEV else "section",
-    label_visibility="collapsed",
-)
-
+# ---------------------------------------------------------------------------
+# Dispatch. One call per page; every body lives in its own module.
+# ---------------------------------------------------------------------------
 if DEV:
     devcenter.render(section, directory, START, END)
-
-
-# ---------------------------------------------------------------------------
-# Overview — the index
-# ---------------------------------------------------------------------------
-if not DEV and section == "Overview":
-    # Ask the Market -- every question goes through the Query Router, which
-    # prefers an existing SQL template and only generates SQL when none fits. A
-    # template answer is therefore the same query the rest of the app runs, so an
-    # answer can never disagree with the page beside it.
-    asked = st.text_input(
-        "Ask the Market", key="ask_q", label_visibility="collapsed",
-        placeholder="Ask the Market…  e.g. “What stock had the highest trading volume?”",
+else:
+    ctx = Ctx(
+        pal=pal, directory=directory, equities=equities, preset=preset,
+        start_d=start_d, end_d=end_d, start=START, end=END,
+        last_date=last_date, index_min=index_min, index_max=index_max,
     )
-    ex_cols = st.columns(len(ask.EXAMPLES))
-    for i_e, ex in enumerate(ask.EXAMPLES):
-        with ex_cols[i_e]:
-            st.button(
-                ex, key=f"ask_ex_{i_e}", width="stretch",
-                on_click=use_example, args=(ex,),
-            )
-
-    if asked and asked.strip():
-        # The current window goes in as the second precedence tier: a question
-        # that names its own window overrides it, one that doesn't inherits it.
-        with st.spinner("Reading the question…"):
-            routed = router.route(
-                asked, directory,
-                ui_start=START, ui_end=END, ui_preset=preset,
-                data_min=index_min, data_max=end_d,
-            )
-
-        if routed.path == router.TEMPLATE_PATH:
-            answers.HANDLERS[routed.template.handler](directory, pal, routed.params)
-
-        elif routed.path == router.GENERATED_PATH:
-            # No template covered this one, so the answer came from generated SQL.
-            # The insight is written from the returned rows, never from the model's
-            # own recollection -- it can only describe what the query actually found.
-            with st.spinner("Reading the result…"):
-                said = nlq.insight(asked, routed.df.head(30).to_csv(index=False))
-            answers.generated(asked, routed.df, pal, insight_text=said or "")
-
-        else:
-            ui.empty_state(routed.error,
-                           "Try naming a company, a sector or a time period — "
-                           "or pick one of the suggestions above.", kind="info")
-        st.divider()
-
-    q = dal.quote(INDEX_SYMBOL)
-    ws = dal.window_stats(INDEX_SYMBOL, START, END)
-    px = dal.prices(INDEX_SYMBOL, START, END)
-
-    if ws is None or px.empty or q is None:
-        ui.empty_state("No index data in the selected window.",
-                       "Widen the date range above — the shortest presets can fall "
-                       "entirely inside a market closure.", kind="warn")
+    if section == "Research":
+        research.render(ctx)
+    elif section == "Intelligence":
+        # NOT windowed, and not all-time either: the engine scores fixed trailing
+        # windows (1-year volatility, 12-1 momentum, trailing-twelve-month
+        # fundamentals) that the methodology defines. Letting the shared filter
+        # reach it would change what "12-1 momentum" means from one visit to the
+        # next -- the scores would stop being comparable to EACH OTHER, which is
+        # a different and worse failure than re-baselining a comparison.
+        market_intel.render(pal)
+    elif section == "Markets":
+        markets.render(ctx)
+    elif section == "Risk & Portfolio":
+        riskfolio.render(ctx)
     else:
-        ui.quote_strip(
-            "S&P 500 Index", INDEX_SYMBOL, q,
-            f"Index · latest session {pd.to_datetime(q['date']):%b %d, %Y}", pal,
-        )
-
-        ui.kpi_cards([
-            {"icon": "📅", "label": f"Return · {preset}", "value": ui.fmt_pct(ws["period_return"], 1),
-             "change": f"{ws['trading_days']:,} sessions", "change_dir": "flat",
-             "foot": "Close-to-close over the window"},
-            {"icon": "📈", "label": "CAGR", "value": ui.fmt_pct(ws["cagr"], 1),
-             "foot": "Annualized over the window"},
-            {"icon": "🏔", "label": "Window high", "value": ui.fmt_price(ws["period_high"], 0),
-             "foot": f"Low {ui.fmt_price(ws['period_low'], 0)}"},
-            {"icon": "📉", "label": "Max drawdown", "value": ui.fmt_pct(ws["max_drawdown"], 1),
-             "change": "peak to trough", "change_dir": "down",
-             "foot": "Deepest fall from a running high"},
-            {"icon": "〰", "label": "Volatility", "value": ui.fmt_pct(ws["ann_volatility"], 1, signed=False),
-             "foot": "Annualized, from daily returns"},
-            {"icon": "🔁", "label": "52-week range", "value": ui.fmt_price(q["w52_low"], 0), "small": True,
-             "foot": f"to {ui.fmt_price(q['w52_high'], 0)} · trailing 1y"},
-        ])
-
-        ui.section("Index level", f"{preset} · hover for the crosshair readout")
-        c1, c2 = st.columns([1.4, 1.4])
-        with c1:
-            scale = st.radio("Scale", ["Linear", "Log"], horizontal=True,
-                             key="ov_scale", label_visibility="collapsed")
-        with c2:
-            show_events = st.toggle("Market events", value=True, key="ov_events",
-                                    help="Mark the crashes, bottoms and turning points")
-
-        fig = charts.price_line(px, pal, log=(scale == "Log"),
-                                label=ui.fmt_price(px["close"].iloc[-1], 0))
-        evts = events.in_range(START, END) if show_events else []
-        charts.add_events(fig, pal, evts)
-        ui.chart(fig, key="ov_price", config=PLOT_CONFIG,
-                 caption="Drag to pan · drag-select to zoom · toolbar (on hover) for autoscale and PNG export")
-
-        if evts:
-            ui.note(
-                f"{len(evts)} market events marked — hover a diamond for what happened "
-                "and why the chart moves there."
-            )
-
-        ui.section("Trading volume", "Daily share volume")
-        ui.chart(charts.volume_bars(px, pal), key="ov_vol", config=PLOT_CONFIG)
-
-
-# ---------------------------------------------------------------------------
-# Market — breadth, sectors, movers
-# ---------------------------------------------------------------------------
-if not DEV and section == "Market":
-    movers = dal.period_movers(START, END)
-    sectors = dal.sector_performance(START, END)
-
-    if movers.empty:
-        ui.empty_state("No symbols traded in this window.",
-                       "Widen the date range above to cover at least one session.",
-                       kind="warn")
-    else:
-        adv = int((movers["period_return"] > 0).sum())
-        dec = int((movers["period_return"] < 0).sum())
-        med = float(movers["period_return"].median())
-        best, worst = movers.iloc[0], movers.iloc[-1]
-
-        ui.kpi_cards([
-            {"icon": "📊", "label": "Advancing", "value": f"{adv}",
-             "change": f"of {len(movers)}", "change_dir": "up", "foot": "Positive over the window"},
-            {"icon": "📉", "label": "Declining", "value": f"{dec}",
-             "change": f"of {len(movers)}", "change_dir": "down", "foot": "Negative over the window"},
-            {"icon": "🎯", "label": "Median return", "value": ui.fmt_pct(med, 1),
-             "foot": "Middle symbol, equal-weighted"},
-            {"icon": "🚀", "label": "Top gainer", "value": ui.esc(best["symbol"]), "small": True,
-             "change": ui.fmt_pct(best["period_return"], 1), "change_dir": "up",
-             "foot": str(best["name"])[:30]},
-            {"icon": "🔻", "label": "Worst decliner", "value": ui.esc(worst["symbol"]), "small": True,
-             "change": ui.fmt_pct(worst["period_return"], 1), "change_dir": "down",
-             "foot": str(worst["name"])[:30]},
-        ])
-
-        ui.section("Sector performance", f"Median member return · {preset}")
-        ui.chart(charts.sector_bars(sectors, pal), key="mkt_sector", config=PLOT_CONFIG, controls=False)
-        ui.note(
-            "Median member return, not the mean: over long windows a mean of total "
-            "returns is dominated by one outlier (a single +85,000% name pulls a "
-            "sector 'average' into five figures), describing that stock rather than "
-            "the sector. Hover a bar for the mean, best and worst alongside. Members "
-            "are equal-weighted, not market-cap-weighted, since share counts aren't "
-            "available from the free data source."
-        )
-
-        ui.section("Movers", f"Every symbol ranked by {preset} return")
-        # Percent columns are scaled to whole percents here. Streamlit's "%%"
-        # number format only appends a literal '%' -- it does not multiply -- so
-        # passing raw fractions would understate every figure by 100x.
-        tbl = movers.assign(
-            Return=movers["period_return"] * 100,
-            Start=movers["start_close"].round(2),
-            End=movers["end_close"].round(2),
-            Liquidity=movers["avg_dollar_volume"],
-        )[["symbol", "name", "sector", "Start", "End", "Return", "Liquidity", "sessions"]]
-        tbl.columns = ["Ticker", "Company", "Sector", "Start", "End", "Return", "Avg $ vol", "Sessions"]
-        ui.data_table(
-            tbl, key="movers",
-            search_cols=("Ticker", "Company", "Sector"),
-        filter_cols=("Sector",),
-            sort_options={"Return": "Return", "Avg $ volume": "Avg $ vol",
-                          "Ticker": "Ticker", "Company": "Company"},
-            default_sort="Return",
-            csv_name=f"movers_{preset.lower().replace(' ', '_')}.csv",
-            column_config={
-                "Return": st.column_config.NumberColumn("Return", format="%+.2f%%",
-                                                        help="Close-to-close over the window"),
-                "Avg $ vol": st.column_config.NumberColumn("Avg $ vol", format="compact"),
-                "Start": st.column_config.NumberColumn("Start", format="%.2f"),
-                "End": st.column_config.NumberColumn("End", format="%.2f"),
-            },
-        )
-
-
-# ---------------------------------------------------------------------------
-# Companies — search, overview, per-symbol charts, comparison
-# ---------------------------------------------------------------------------
-if not DEV and section == "Companies":
-    # Autocomplete: one option per symbol, searchable by ticker OR company name
-    # because the label contains both and Streamlit's selectbox filters substrings.
-    label_by_key = {f"{r.symbol} — {r['name']}": r.symbol for _, r in equities.iterrows()}
-    keys = list(label_by_key)
-    default_key = next((k for k in keys if label_by_key[k] == "AAPL"), keys[0])
-
-    pick = st.columns([2.6, 1.4])
-    with pick[0]:
-        chosen_label = st.selectbox(
-            "Search company or ticker", keys,
-            index=keys.index(st.session_state.get("co_symbol", default_key))
-            if st.session_state.get("co_symbol") in keys else keys.index(default_key),
-            key="co_symbol",
-            help="Type a ticker (AAPL) or a company name (Apple)",
-        )
-    sym = label_by_key[chosen_label]
-    meta = equities[equities["symbol"] == sym].iloc[0]
-
-    with pick[1]:
-        view_mode = st.radio("View", ["Line", "Candles"], horizontal=True,
-                             key="co_view", label_visibility="collapsed")
-
-    s_min, s_max = dal.date_bounds(sym)
-    c_start = max(start_d, s_min)
-    cs, ce = c_start.isoformat(), end_d.isoformat()
-
-    cq = dal.quote(sym)
-    cws = dal.window_stats(sym, cs, ce)
-    cpx = dal.prices(sym, cs, ce)
-
-    if cq is None or cws is None or cpx.empty:
-        ui.empty_state(f"{sym} has no sessions in this window.",
-                       "This company may have listed after the window ends — try "
-                       "All Time to see its full history.", kind="warn")
-    else:
-        listed_note = ""
-        if s_min > start_d:
-            listed_note = f" · history starts {s_min:%b %Y}, after the selected window opens"
-        ui.quote_strip(
-            str(meta["name"]), sym, cq,
-            f"{meta['sector']} · {meta['industry']}{listed_note}", pal,
-        )
-
-        # Return, CAGR, volatility and max drawdown lead: they are what a company
-        # is actually researched on, and the pair of them (a return and the ride
-        # it took) is the comparison the About page argues for. Max drawdown was
-        # previously a sub-line on the volatility card, which read as a footnote
-        # to volatility rather than as the peer metric it is.
-        ui.kpi_cards([
-            {"icon": "📅", "label": f"Return · {preset}", "value": ui.fmt_pct(cws["period_return"], 1),
-             "change": f"{cws['trading_days']:,} sessions", "change_dir": "flat",
-             "foot": f"{pd.to_datetime(cws['first_date']):%b %Y} → {pd.to_datetime(cws['last_date']):%b %Y}"},
-            {"icon": "📈", "label": "CAGR", "value": ui.fmt_pct(cws["cagr"], 1),
-             "foot": "Annualized over the window"},
-            {"icon": "〰", "label": "Volatility", "value": ui.fmt_pct(cws["ann_volatility"], 1, signed=False),
-             "foot": "Annualized, from daily returns"},
-            {"icon": "📉", "label": "Max drawdown", "value": ui.fmt_pct(cws["max_drawdown"], 1),
-             "change": "peak to trough", "change_dir": "down",
-             "foot": "Deepest fall from a running high"},
-            {"icon": "🔁", "label": "52-week high", "value": ui.fmt_price(cq["w52_high"]),
-             "foot": f"Low {ui.fmt_price(cq['w52_low'])} · trailing 1y"},
-            {"icon": "🔊", "label": "Avg volume", "value": ui.fmt_compact(cws["avg_volume"]),
-             "foot": f"{ui.fmt_dollar_compact(cws['avg_dollar_volume'])} avg turnover"},
-        ])
-        ui.note(
-            "Market cap is intentionally absent: it needs share-count data that no "
-            "reachable free endpoint provides, and a stale hardcoded figure would be "
-            "worse than none. Average dollar turnover is shown instead — it is computed "
-            "from data actually in the database."
-        )
-
-        ui.section("Price history", f"{sym} · {preset}")
-        # The window high/low used to be its own KPI card. It belongs beside the
-        # chart that shows it, and moving it there kept the metric row to the four
-        # figures a company is researched on plus two of context.
-        hi_lo = (f"Window high {ui.fmt_price(cws['highest_close'])} · "
-                 f"low {ui.fmt_price(cws['lowest_close'])}")
-        if view_mode == "Candles":
-            ui.chart(charts.candlestick(cpx, pal), key="co_candle", config=PLOT_CONFIG,
-                     caption=hi_lo)
-        else:
-            fig_co = charts.price_line(cpx, pal, label=ui.fmt_price(cpx["close"].iloc[-1]))
-            charts.add_events(fig_co, pal, events.in_range(cs, ce))
-            ui.chart(fig_co, key="co_price", config=PLOT_CONFIG, caption=hi_lo)
-
-        # Six charts used to render in sequence here, which buried the comparison
-        # below a scroll of secondary analysis. They are now one radio deep, for
-        # the same reason st.tabs is refused for section switching: only the
-        # selected view renders, so a visit runs one query instead of six and no
-        # Plotly figure is measured inside a hidden container. Nothing was
-        # removed -- every chart is still reachable, "Hide" is just the default.
-        detail = st.radio(
-            "More analysis",
-            ["Hide", "Moving averages", "Volume & daily returns",
-             "Growth & volatility", "Drawdown"],
-            horizontal=True, key="co_detail",
-            help="Deeper charts for this company, one at a time",
-        )
-
-        if detail == "Moving averages":
-            ui.section("Moving averages", "Close with trailing 50- and 200-session means")
-            ma = dal.moving_averages(sym, cs, ce)
-            ui.chart(charts.moving_average_chart(ma, pal), key="co_ma", config=PLOT_CONFIG)
-            ui.note(
-                "A moving-average line only begins once its full window exists, so the "
-                "200-session average is absent for the first 200 sessions rather than "
-                "being averaged from fewer points than its label claims."
-            )
-
-        elif detail == "Volume & daily returns":
-            left, right = st.columns(2)
-            with left:
-                ui.section("Trading volume")
-                ui.chart(charts.volume_bars(cpx, pal), key="co_vol", config=PLOT_CONFIG, controls=False)
-            with right:
-                ui.section("Daily returns")
-                dr = dal.daily_returns(sym, cs, ce)
-                ui.chart(charts.returns_bars(dr, pal), key="co_ret", config=PLOT_CONFIG, controls=False)
-
-        elif detail == "Growth & volatility":
-            l2, r2 = st.columns(2)
-            with l2:
-                ui.section("Cumulative return", "Compounded from daily returns")
-                cr = dal.cumulative_return(sym, cs, ce)
-                if not cr.empty:
-                    ui.chart(
-                        charts.area_series(cr, "cumulative_return", pal, color_key="blue",
-                                           y_title="Cumulative", height=charts.H_COMPACT,
-                                           label=ui.fmt_pct(cr["cumulative_return"].iloc[-1], 0)),
-                        key="co_cum", config=PLOT_CONFIG, controls=False,
-                    )
-            with r2:
-                ui.section("Rolling volatility", "21-session, annualized")
-                cv = dal.volatility(sym, cs, ce)
-                if not cv.empty:
-                    ui.chart(
-                        charts.area_series(cv, "ann_volatility_21d", pal, color_key="red",
-                                           y_title="Ann. volatility", height=charts.H_COMPACT,
-                                           label=ui.fmt_pct(cv["ann_volatility_21d"].iloc[-1], 0, signed=False),
-                                           zero_line=False),
-                        key="co_vola", config=PLOT_CONFIG, controls=False,
-                    )
-
-        elif detail == "Drawdown":
-            ui.section("Drawdown", "How far below its previous high the price sat")
-            cdd = dal.drawdowns(sym, cs, ce)
-            if not cdd.empty:
-                fig_dd = charts.area_series(cdd, "drawdown", pal, color_key="red",
-                                            y_title="Drawdown", height=charts.H_COMPACT, tickformat=".0%")
-                worst_c = cdd.loc[cdd["drawdown"].idxmin()]
-                fig_dd.add_annotation(
-                    x=worst_c["date"], y=worst_c["drawdown"],
-                    text=f"{worst_c['drawdown'] * 100:.1f}% · {pd.to_datetime(worst_c['date']):%b %Y}",
-                    showarrow=True, arrowhead=0, arrowcolor=pal["muted"], ax=0, ay=-26,
-                    font=dict(color=pal["text_primary"], size=11.5),
-                )
-                charts.add_events(fig_dd, pal, events.in_range(cs, ce), label=False)
-                ui.chart(fig_dd, key="co_dd", config=PLOT_CONFIG, controls=False,
-                         caption="Measured from the running all-time high — the loss an investor sat through")
-
-        # ---- peer comparison ----
-        ui.section("Peer comparison", "Rebased to 100 at the window start — one shared axis")
-
-        # Open on a real peer set: the same sector, ranked by the turnover already
-        # computed for the Market table (period_movers is cached, so this is a
-        # cache hit rather than a new query). The old default paired every company
-        # with MSFT, which is a peer for a handful of them and noise for the rest.
-        known = set(directory["symbol"])
-        pm = dal.period_movers(START, END)
-        same_sector = pm[(pm["sector"] == meta["sector"]) & (pm["symbol"] != sym)]
-        top_peers = list(
-            same_sector.sort_values("avg_dollar_volume", ascending=False)["symbol"].head(2)
-        )
-        peer_default = [sym] + (top_peers or [s for s in (INDEX_SYMBOL,) if s in known])
-
-        # Follow the selected company. A multiselect with a key keeps its value
-        # forever, so without this, switching from Apple to Exxon would leave the
-        # comparison showing Apple's peers -- stale in a way that reads as a bug.
-        # Writing a widget key is only forbidden AFTER the widget exists.
-        if st.session_state.get("co_last_sym") != sym:
-            st.session_state["co_last_sym"] = sym
-            st.session_state["cmp_syms"] = peer_default
-        # The limit used to be 8; a selection stored from then would exceed
-        # max_selections and raise on a session that survived a hot-update.
-        stored = st.session_state.get("cmp_syms")
-        if stored is not None and len(stored) > 3:
-            st.session_state["cmp_syms"] = list(stored)[:3]
-
-        cmp_syms = st.multiselect(
-            "Compare with", options=list(directory["symbol"]),
-            default=peer_default, key="cmp_syms", max_selections=3,
-            help="Up to three. Defaults to the biggest companies in the same sector; "
-                 "add ^GSPC to compare against the index.",
-        )
-        cmp_metric = st.radio(
-            "Compare on", ["Price (rebased)", "Cumulative return", "Drawdown",
-                           "Rolling volatility", "Daily returns", "Volume"],
-            horizontal=True, key="cmp_metric", label_visibility="collapsed",
-        )
-
-        if len(cmp_syms) < 2:
-            ui.note("Pick at least two symbols to compare.")
-        elif cmp_metric != "Price (rebased)":
-            # Every other metric is already unit-comparable across companies
-            # (percentages, or share counts), so it overlays directly -- still on
-            # one shared axis, never a second y-scale.
-            spec = {
-                "Cumulative return": ("cumulative_return", "Cumulative return", ".0%", ".1%", True),
-                "Drawdown":          ("drawdown", "Drawdown", ".0%", ".1%", True),
-                "Rolling volatility": ("ann_volatility_21d", "Ann. volatility", ".0%", ".1%", False),
-                "Daily returns":     ("daily_return", "Daily return", ".1%", ".2%", True),
-                "Volume":            ("volume", "Volume", None, ",.0f", False),
-            }[cmp_metric]
-            col, title, tickfmt, hoverfmt, zline = spec
-            frames = dal.comparison_frames(tuple(cmp_syms), START, END, cmp_metric)
-            if not frames:
-                ui.note("No data for that selection in this window.")
-            else:
-                fig_m = charts.multi_series(
-                    frames, pal, value_col=col, y_title=title, height=charts.H_PRIMARY,
-                    tickformat=tickfmt, zero_line=zline, hover_fmt=hoverfmt,
-                )
-                charts.add_events(fig_m, pal, events.in_range(START, END), label=False)
-                ui.chart(fig_m, key=f"co_cmp_{col}", config=PLOT_CONFIG,
-                         caption=f"{cmp_metric} for {len(frames)} symbols on one shared axis")
-                ui.note(
-                    "These metrics are already comparable across companies, so they "
-                    "overlay directly. A second y-axis is never used: two independent "
-                    "scales can be aligned to imply any relationship you like."
-                )
-        else:
-            pivot = dal.indexed_comparison(tuple(cmp_syms), START, END)
-            if pivot.empty:
-                ui.note("No overlapping data for that selection in this window.")
-            else:
-                # Default to log when the spread is wide enough that a linear axis
-                # would flatten the smaller series onto the baseline.
-                wide = charts.comparison_needs_log(pivot)
-                cscale = st.radio(
-                    "Comparison scale", ["Log", "Linear"] if wide else ["Linear", "Log"],
-                    horizontal=True, key="cmp_scale", label_visibility="collapsed",
-                )
-                ui.chart(
-                    charts.indexed_comparison(pivot, pal, log=(cscale == "Log")),
-                    key="co_cmp", config=PLOT_CONFIG,
-                )
-                if wide and cscale == "Log":
-                    ui.note(
-                        "Log scale is on by default here because these series end more "
-                        "than 20x apart — on a linear axis the smaller ones would flatten "
-                        "onto the baseline. On a log axis equal ratios take equal vertical "
-                        "space, so each series stays readable. Still one shared axis."
-                    )
-                finals = pivot.ffill().iloc[-1].sort_values(ascending=False)
-                rows = pd.DataFrame({
-                    "Ticker": finals.index,
-                    "Indexed (start=100)": finals.values.round(1),
-                    "Window return": (finals.values - 100.0),  # already indexed to 100 = whole percents
-                    "First data": [pivot[c].first_valid_index().date() for c in finals.index],
-                })
-                ui.table_view(
-                    "Comparison — table view", rows,
-                    column_config={
-                        "Window return": st.column_config.NumberColumn(
-                            "Window return", format="%+.2f%%"),
-                        "Indexed (start=100)": st.column_config.NumberColumn(
-                            "Indexed (start=100)", format="%.1f",
-                            help="Every series starts at 100 on the window's first session"),
-                    },
-                )
-                ui.note(
-                    "Rebasing to 100 puts every symbol on one axis. A second y-axis is "
-                    "deliberately never used: two independent scales can be aligned to "
-                    "suggest any correlation you like. Where a symbol listed after the "
-                    "window opened, its series starts later — see 'First data'."
-                )
-
-
-# ---------------------------------------------------------------------------
-# Journey — one company's whole record, replayed forward in time
-# ---------------------------------------------------------------------------
-# ALL-TIME by construction, so it is not in WINDOWED_SECTIONS: a journey is the
-# company's entire history, and the cursor selects a POINT inside that record
-# rather than narrowing it. This is not the per-section date filter that was
-# proposed and rejected twice -- nothing here re-baselines a figure that another
-# section also shows.
-#
-# WIDGET-KEY DISCIPLINE, which the whole section is arranged around: Streamlit
-# forbids writing a widget's key after that widget has been instantiated in the
-# current run. The cursor is moved from four places (playback, a timeline jump,
-# a Did You Know jump, a chart click), so the slider is created INSIDE the
-# fragment with every cursor write happening above it. Button callbacks are safe
-# anywhere because on_click fires before the next run builds any widget.
-if not DEV and section == "Journey":
-    jrn_labels = {f"{r.symbol} — {r['name']}": r.symbol for _, r in equities.iterrows()}
-    jrn_keys = list(jrn_labels)
-    jrn_default = next((k for k in jrn_keys if jrn_labels[k] == "AAPL"), jrn_keys[0])
-
-    ui.section("Stock Journey", "Travel through a company's history and watch it happen")
-
-    head = st.columns([2.4, 1.15, 1.15])
-    with head[0]:
-        jrn_label = st.selectbox(
-            "Search company or ticker", jrn_keys,
-            index=jrn_keys.index(st.session_state.get("jrn_symbol", jrn_default))
-            if st.session_state.get("jrn_symbol") in jrn_keys else jrn_keys.index(jrn_default),
-            key="jrn_symbol", help="Type a ticker (AAPL) or a company name (Apple)",
-        )
-    jsym = jrn_labels[jrn_label]
-    jmeta = equities[equities["symbol"] == jsym].iloc[0]
-    j_min, j_max = dal.date_bounds(jsym)
-
-    with head[1]:
-        jrn_speed = st.radio("Speed", list(JOURNEY_STEPS), horizontal=True,
-                             index=list(JOURNEY_STEPS).index(JOURNEY_DEFAULT_SPEED),
-                             key="jrn_speed", label_visibility="collapsed",
-                             help="How much history each playback frame advances")
-
-    # A default selection must follow its subject. The cursor is reset whenever
-    # the company changes -- otherwise switching from Apple to a company that
-    # listed in 2020 leaves the cursor in 2015, before that company has a single
-    # price row, and every panel empties at once. Written here, before the
-    # slider exists, which is the only point Streamlit allows it.
-    if st.session_state.get("jrn_last_symbol") != jsym:
-        st.session_state["jrn_last_symbol"] = jsym
-        st.session_state["jrn_slider"] = j_max
-        st.session_state["jrn_playing"] = False
-        st.session_state.pop("jrn_pending_jump", None)
-
-    # Clamp a cursor that survived a company change or a hot-update. st.slider
-    # raises on a stored value outside its own min/max, the same failure mode
-    # the date preset had.
-    stored = st.session_state.get("jrn_slider")
-    if isinstance(stored, dt.date) and not (j_min <= stored <= j_max):
-        st.session_state["jrn_slider"] = min(max(stored, j_min), j_max)
-
-    def jrn_jump(date_str: str) -> None:
-        """Move the cursor. Safe from a button callback: it runs before the rerun."""
-        target = dt.date.fromisoformat(str(date_str)[:10])
-        st.session_state["jrn_slider"] = min(max(target, j_min), j_max)
-        st.session_state["jrn_playing"] = False  # a jump is a deliberate stop
-
-    with head[2]:
-        playing = st.session_state.get("jrn_playing", False)
-        btn = st.columns(2)
-        with btn[0]:
-            if st.button("⏸ Pause" if playing else "▶ Play", key="jrn_play",
-                         width="stretch", type="secondary" if playing else "primary"):
-                # At the end of the record, Play restarts rather than doing
-                # nothing -- a button that looks live and is inert reads as broken.
-                if not playing and st.session_state.get("jrn_slider", j_max) >= j_max:
-                    st.session_state["jrn_slider"] = j_min
-                st.session_state["jrn_playing"] = not playing
-                st.rerun()
-        with btn[1]:
-            if st.button("↺ Restart", key="jrn_restart", width="stretch"):
-                st.session_state["jrn_slider"] = j_min
-                st.session_state["jrn_playing"] = False
-                st.rerun()
-
-    step_days = JOURNEY_STEPS[jrn_speed]
-    is_playing = st.session_state.get("jrn_playing", False)
-
-    # The fragment is what makes playback affordable. A full script rerun every
-    # 0.4s would re-run the control row, the section radio and every query the
-    # page above owns; a fragment redraws only this panel.
-    @st.fragment(run_every=JOURNEY_TICK if is_playing else None)
-    def journey_panel() -> None:
-        # --- Every cursor write happens here, ABOVE the slider. ---
-        pending = st.session_state.pop("jrn_pending_jump", None)
-        if pending is not None:
-            st.session_state["jrn_slider"] = min(max(pending, j_min), j_max)
-
-        if st.session_state.get("jrn_playing"):
-            nxt = st.session_state.get("jrn_slider", j_min) + dt.timedelta(days=step_days)
-            if nxt >= j_max:
-                st.session_state["jrn_slider"] = j_max
-                st.session_state["jrn_playing"] = False
-                # scope="app" so the fragment is re-decorated WITHOUT run_every.
-                # A fragment-scoped rerun would leave the timer running against
-                # a cursor that can no longer move.
-                st.rerun(scope="app")
-            st.session_state["jrn_slider"] = nxt
-
-        cursor = st.slider(
-            "Journey cursor", min_value=j_min, max_value=j_max,
-            value=st.session_state.get("jrn_slider", j_max),
-            key="jrn_slider", format="MMM YYYY", label_visibility="collapsed",
-            help="Drag to travel through this company's history",
-        )
-        asof = cursor.isoformat()
-
-        snap = dal.journey_snapshot(jsym, asof)
-        path = dal.journey_price_path(jsym, JOURNEY_STRIDE)
-
-        if snap is None or path.empty:
-            ui.empty_state(
-                f"{jmeta['name']} has no sessions on or before {cursor:%b %d, %Y}.",
-                "Drag the cursor forward — this company listed later than the "
-                "start of the record.", kind="warn")
-            return
-
-        # --- Facts for THIS instant. Every one is a query against `asof`, so
-        # nothing on the panel can describe a moment the chart is not showing.
-        records = dal.journey_records(jsym, asof)
-        extremes = dal.journey_extremes(jsym, asof, limit=3)
-        up_runs = dal.journey_streaks(jsym, asof, direction=1, limit=1)
-        down_runs = dal.journey_streaks(jsym, asof, direction=-1, limit=1)
-        best_worst = dal.journey_best_worst(jsym, asof)
-        # The cursor is a query parameter on every one of these, never a filter
-        # applied to the result. An episode still open at the cursor must report
-        # a NULL recovery rather than one dated in the reader's future.
-        crashes = dal.journey_drawdowns(jsym, asof, min_depth=JOURNEY_MIN_DRAWDOWN)
-        trends = dal.journey_trend_changes(jsym, asof)
-        co_events = dal.journey_company_events(jsym, asof, sessions=JOURNEY_EVENT_SESSIONS)
-        mkt_events = dal.journey_market_events(
-            jsym, asof, sessions=JOURNEY_EVENT_SESSIONS, min_move=JOURNEY_MIN_MOVE)
-
-        moments = journey.timeline(
-            company_events=co_events, market_events=mkt_events,
-            drawdowns=crashes, extremes=extremes, asof=asof,
-        )
-
-        ui.journey_header(
-            cursor.strftime("%B %-d, %Y"), snap["close"],
-            journey.chapter_label(snap),
-            f"{ui.fmt_pct(snap['return_to_date'])} since {snap['first_date'][:4]}",
-            "up" if snap["return_to_date"] >= 0 else "down",
-        )
-
-        ui.kpi_cards([
-            {"icon": "📅", "label": "Into the journey",
-             "value": f"{snap['years_elapsed']:.1f} yrs",
-             "foot": f"{int(snap['sessions_elapsed']):,} sessions traded"},
-            {"icon": "📈", "label": "Compound annual return",
-             "value": ui.fmt_pct(snap["cagr_to_date"], 1),
-             "foot": "Annualized, from the first session in the record"},
-            {"icon": "🏔️", "label": "All-time high so far",
-             "value": ui.fmt_price(snap["peak_close"]),
-             "foot": "The highest close reached by this date"},
-            {"icon": "🕳️", "label": "Below that high",
-             "value": ui.fmt_pct(snap["drawdown"], 1),
-             "change_dir": "down" if snap["drawdown"] < -0.001 else "flat",
-             "foot": "Distance from the running record"},
-        ])
-
-        panes = st.columns([2.45, 1.0])
-        with panes[0]:
-            fig = charts.journey_path(path, pal, asof=asof, moments=moments,
-                                      log=st.session_state.get("jrn_log", True))
-            picked = ui.chart(
-                fig, key="jrn_path", config=PLOT_CONFIG, controls=False, select=True,
-                caption=("Solid is history travelled, faint is still ahead. Diamonds, "
-                         "circles and squares are events — hover one, or click "
-                         "anywhere on the line to travel there."),
-            )
-            # A click is stashed and applied on the NEXT fragment run, above the
-            # slider. Applying it here would write an already-instantiated
-            # widget's key, which Streamlit forbids.
-            if picked and picked.get("selection", {}).get("points"):
-                clicked = str(picked["selection"]["points"][0].get("x", ""))[:10]
-                if clicked and clicked != st.session_state.get("jrn_last_click"):
-                    st.session_state["jrn_last_click"] = clicked
-                    try:
-                        st.session_state["jrn_pending_jump"] = dt.date.fromisoformat(clicked)
-                        st.session_state["jrn_playing"] = False
-                        st.rerun(scope="fragment")
-                    except ValueError:
-                        pass  # a click on a non-date axis position; ignore
-
-            ui.chart(charts.journey_drawdown_band(path, pal, asof=asof),
-                     key="jrn_dd", config=PLOT_CONFIG, controls=False,
-                     caption="How far below its own record the company was, at every point so far.")
-
-        with panes[1]:
-            ui.section("Timeline", f"{len(moments)} moments so far")
-            with st.container(height=560):
-                ui.journey_timeline(moments, on_jump=jrn_jump, key_prefix="jrntl")
-
-        ui.section("Did you know?", f"What the record says about {jmeta['name']} by this date")
-        facts = journey.did_you_know(
-            name=str(jmeta["name"]), snapshot=snap, records=records, extremes=extremes,
-            up_streaks=up_runs, down_streaks=down_runs, best_worst=best_worst,
-            drawdowns=crashes, company_events=co_events, trend_changes=trends,
-        )
-        ui.did_you_know(facts, on_jump=jrn_jump, key_prefix="jrnfact")
-
-        ui.table_view(
-            "Timeline data",
-            pd.DataFrame([{
-                "Date": m.date, "Kind": m.kind, "Event": m.title,
-                # Scaled to percentage points here, like every other percent
-                # column in the app: the `%%` format string prints the number
-                # it is given, so a raw 0.0643 would render as "0.06%".
-                "Company move": None if m.move is None else m.move * 100,
-                "Source": m.source,
-            } for m in moments]),
-            column_config={"Company move": st.column_config.NumberColumn(
-                "Company move", format="%+.2f%%")},
-            footer=("Company events are curated and carry a source. Market events are "
-                    "kept only where this company itself moved at least "
-                    f"{JOURNEY_MIN_MOVE:.0%}. Milestones are computed from the price data."),
-        )
-
-    journey_panel()
-
-    ui.note(
-        "The journey is always the company's whole record, so the date filter above "
-        "does not apply here. Returns are price-only and exclude dividends, and the "
-        "first session shown is where this dataset begins — not the company's IPO, "
-        "which appears as a curated event where one is recorded."
-    )
-
-
-# ---------------------------------------------------------------------------
-# Performance — leaderboards over each symbol's own history
-# ---------------------------------------------------------------------------
-if not DEV and section == "Performance":
-    lb = dal.leaderboard()
-    ui.section("Long-run performance", "Each symbol over its own listed history")
-    ui.note(
-        "These are all-time figures per symbol, so the periods are NOT equal — a name "
-        "listed in 2012 has not had the same run as one listed in 2001. 'Years' and "
-        "'From' are shown so the comparison stays honest. Use the Market tab for "
-        "like-for-like returns inside a single window."
-    )
-
-    # As above: scale fractions to whole percents, because the "%%" format only
-    # appends a percent sign rather than multiplying.
-    disp = lb.assign(
-        Ticker=lb["symbol"], Company=lb["name"], Sector=lb["sector"],
-        From=pd.to_datetime(lb["first_date"]).dt.date,
-        Years=lb["years"].round(1),
-        Last=lb["last_close"].round(2),
-        Total=lb["total_return"] * 100, CAGR=lb["cagr"] * 100,
-        Vol=lb["ann_volatility"] * 100, MaxDD=lb["max_drawdown"] * 100,
-    )[["Ticker", "Company", "Sector", "From", "Years", "Last", "Total", "CAGR", "Vol", "MaxDD"]]
-
-    ui.data_table(
-        disp, key="perf",
-        search_cols=("Ticker", "Company", "Sector"),
-        filter_cols=("Sector",),
-        sort_options={
-            "CAGR": "CAGR", "Total return": "Total", "Volatility": "Vol",
-            "Max drawdown": "MaxDD", "Years": "Years", "Ticker": "Ticker",
-        },
-        default_sort="CAGR",
-        csv_name="performance.csv",
-        height=460,
-        column_config={
-            "Total": st.column_config.NumberColumn("Total return", format="%+.1f%%"),
-            "CAGR": st.column_config.NumberColumn("CAGR", format="%+.2f%%"),
-            "Vol": st.column_config.NumberColumn("Volatility", format="%.2f%%"),
-            "MaxDD": st.column_config.NumberColumn("Max DD", format="%.1f%%"),
-            "Last": st.column_config.NumberColumn("Last", format="%.2f"),
-            "Years": st.column_config.NumberColumn("Years", format="%.1f"),
-        },
-    )
-
-    ui.section("Calendar-year returns", "S&P 500 index, per year")
-    y = dal.yearly(INDEX_SYMBOL).copy()
-    if not y.empty:
-        y["partial"] = y["is_partial"] == 1
-        y["tick"] = y.apply(lambda r: f"{r['year']}*" if r["partial"] else r["year"], axis=1)
-        y["label"] = ""
-        full = y[~y["partial"]]
-        if not full.empty:
-            for idx in (full["year_return"].idxmax(), full["year_return"].idxmin()):
-                y.loc[idx, "label"] = ui.fmt_pct(y.loc[idx, "year_return"], 1)
-        ui.chart(charts.yearly_return_bars(y, pal), key="perf_yearly", config=PLOT_CONFIG, controls=False)
-        partials = y.loc[y["partial"], "year"].tolist()
-        if partials:
-            ui.note(
-                f"* {', '.join(partials)} are faded: the dataset covers only part of those "
-                "years, so they are period returns, not calendar-year returns."
-            )
-
-    # Rolling returns. Stays all-time like the rest of this section: the point is
-    # every holding period in the record, so narrowing to a window would discard
-    # the outcomes that make the spread worth showing.
-    ui.section("Rolling returns", "S&P 500 index · every holding period of a fixed length")
-    horizon = st.radio(
-        "Holding period", list(ROLLING_HORIZONS), key="perf_roll",
-        horizontal=True, label_visibility="collapsed",
-    )
-    roll_sessions = ROLLING_HORIZONS[horizon]
-    roll = dal.rolling_returns(INDEX_SYMBOL, roll_sessions)
-    rsum = dal.rolling_return_summary(INDEX_SYMBOL, roll_sessions)
-
-    if roll.empty or rsum is None:
-        ui.empty_state(f"The record is shorter than {horizon}.",
-                       "No complete holding period of that length exists yet — pick a "
-                       "shorter one.")
-    else:
-        ui.kpi_cards([
-            {"icon": "🟢", "label": "Ended positive",
-             "value": ui.fmt_pct(rsum["share_positive"], 0, signed=False),
-             "foot": f"of {int(rsum['periods']):,} {horizon} periods"},
-            {"icon": "🥇", "label": "Best", "value": ui.fmt_pct(rsum["best"], 1),
-             "change": f"to {pd.to_datetime(rsum['best_end_date']):%b %Y}", "change_dir": "up",
-             "foot": "Annualized, best end date"},
-            {"icon": "🥀", "label": "Worst", "value": ui.fmt_pct(rsum["worst"], 1),
-             "change": f"to {pd.to_datetime(rsum['worst_end_date']):%b %Y}", "change_dir": "down",
-             "foot": "Annualized, worst end date"},
-            {"icon": "🎯", "label": "Median", "value": ui.fmt_pct(rsum["median_return"], 1),
-             "foot": f"Typical {horizon} outcome"},
-        ])
-        fig_roll = charts.area_series(
-            roll, "annualized_return", pal, color_key="blue",
-            y_title=f"{horizon} annualized return", height=charts.H_PRIMARY, tickformat=".0%",
-        )
-        charts.add_events(fig_roll, pal, events.in_range(
-            roll["date"].iloc[0].date().isoformat(), END))
-        ui.chart(fig_roll, key="perf_rolling", config=PLOT_CONFIG,
-                 caption="Each point is the annualized return of the period ENDING that day")
-        ui.note(
-            f"Every {horizon} stretch in the record, not one window — the point plotted "
-            f"on a date is what an investor earned per year over the {horizon} ending "
-            "there. The spread between the best and worst bars is the real risk of the "
-            "horizon, which a single cumulative line hides completely. Returns are "
-            "annualized so the four horizons stay comparable, and overlapping periods "
-            "share most of their history, so neighbouring points are not independent."
-        )
-
-    ui.section("Monthly seasonality", "S&P 500 index · month by year")
-    m = dal.monthly(INDEX_SYMBOL)
-    if not m.empty:
-        piv = m.pivot(index="year", columns="month", values="month_return")
-        piv = piv.reindex(columns=[f"{i:02d}" for i in range(1, 13)])
-        ui.chart(charts.seasonality_heatmap(piv, pal, MONTHS), key="perf_season", config=PLOT_CONFIG, controls=False)
-        ui.table_view("Monthly returns — table view",
-                      piv.style.format("{:+.2%}", na_rep="—"), hide_index=False)
-
-
-# ---------------------------------------------------------------------------
-# Risk
-# ---------------------------------------------------------------------------
-if not DEV and section == "Risk":
-    rsym = st.selectbox(
-        "Symbol", list(directory["symbol"]), key="risk_sym",
-        format_func=lambda s: f"{s} — {directory.loc[directory['symbol'] == s, 'name'].iloc[0]}",
-    )
-    r_min, _ = dal.date_bounds(rsym)
-    rs = max(start_d, r_min).isoformat()
-
-    dd = dal.drawdowns(rsym, rs, END)
-    vol = dal.volatility(rsym, rs, END)
-    rws = dal.window_stats(rsym, rs, END)
-
-    if dd.empty or rws is None:
-        ui.empty_state(f"{rsym} has no sessions in this window.",
-                       "Widen the date range above, or pick a company with a longer "
-                       "listed history.", kind="warn")
-    else:
-        worst = dd.loc[dd["drawdown"].idxmin()]
-        cur = dd["drawdown"].iloc[-1]
-        ui.kpi_cards([
-            {"icon": "📉", "label": "Max drawdown", "value": ui.fmt_pct(rws["max_drawdown"], 1),
-             "change": f"{pd.to_datetime(worst['date']):%b %Y}", "change_dir": "down",
-             "foot": "Deepest fall from a running high"},
-            {"icon": "📍", "label": "Current drawdown", "value": ui.fmt_pct(cur, 1),
-             "change_dir": "down" if cur < -0.001 else "flat",
-             "change": "below peak" if cur < -0.001 else "at peak",
-             "foot": "Distance below the running high"},
-            {"icon": "〰", "label": "Volatility (window)",
-             "value": ui.fmt_pct(rws["ann_volatility"], 1, signed=False),
-             "foot": "Annualized, from daily returns"},
-            {"icon": "⚡", "label": "Volatility (21d)",
-             "value": ui.fmt_pct(vol["ann_volatility_21d"].iloc[-1], 1, signed=False) if not vol.empty else "—",
-             "foot": "Most recent 21-session reading"},
-        ])
-
-        ui.section("Drawdown from running high", f"{rsym} · underwater curve")
-        fig = charts.area_series(dd, "drawdown", pal, color_key="red",
-                                 y_title="Drawdown", height=charts.H_PRIMARY, tickformat=".0%")
-        fig.add_annotation(
-            x=worst["date"], y=worst["drawdown"],
-            text=f"{worst['drawdown'] * 100:.1f}% · {pd.to_datetime(worst['date']):%b %Y}",
-            showarrow=True, arrowhead=0, arrowcolor=pal["muted"], ax=0, ay=-26,
-            font=dict(color=pal["text_primary"], size=11.5),
-        )
-        charts.add_events(fig, pal, events.in_range(rs, END))
-        ui.chart(fig, key="risk_dd", config=PLOT_CONFIG,
-                 caption="Event markers show what drove each decline — hover a diamond for detail")
-
-        ui.section("Rolling volatility", "21-session, annualized")
-        if not vol.empty:
-            ui.chart(
-                charts.area_series(vol, "ann_volatility_21d", pal, color_key="blue",
-                                   y_title="Ann. volatility", height=charts.H_COMPACT,
-                                   label=ui.fmt_pct(vol["ann_volatility_21d"].iloc[-1], 0, signed=False),
-                                   zero_line=False),
-                key="risk_vol", config=PLOT_CONFIG, controls=False,
-            )
-
-        ui.section("How these move together", f"Daily-return correlation · {preset}")
-        corr_syms = st.multiselect(
-            "Companies", list(directory["symbol"]),
-            default=[s for s in CORR_DEFAULT if s in set(directory["symbol"])],
-            key="risk_corr_syms", max_selections=8,
-            format_func=lambda s: f"{s} — {directory.loc[directory['symbol'] == s, 'name'].iloc[0]}",
-            help="Two to eight companies",
-        )
-
-        if len(corr_syms) < 2:
-            ui.empty_state("Pick at least two companies.",
-                           "Correlation describes a pair, so it needs two names "
-                           "to compare.")
-        else:
-            cm = dal.correlation_matrix(tuple(corr_syms), START, END)
-            cp = dal.correlation_pairs(tuple(corr_syms), START, END)
-            if cm.empty or cp.empty:
-                ui.empty_state("Those companies share no trading sessions in this window.",
-                               "Correlation needs days where every name traded — widen "
-                               "the window or drop the most recently listed company.",
-                               kind="warn")
-            else:
-                usable = cp.dropna(subset=["correlation"])
-                if not usable.empty:
-                    hi = usable.loc[usable["correlation"].idxmax()]
-                    lo = usable.loc[usable["correlation"].idxmin()]
-                    ui.kpi_cards([
-                        {"icon": "🔗", "label": "Most correlated",
-                         "value": f"{hi['sym_a']} · {hi['sym_b']}", "small": True,
-                         "change": f"{hi['correlation']:.2f}", "change_dir": "flat",
-                         "foot": "Moves most closely together"},
-                        {"icon": "🪢", "label": "Least correlated",
-                         "value": f"{lo['sym_a']} · {lo['sym_b']}", "small": True,
-                         "change": f"{lo['correlation']:.2f}", "change_dir": "flat",
-                         "foot": "The most diversifying pair here"},
-                        {"icon": "📐", "label": "Average pair",
-                         "value": f"{usable['correlation'].mean():.2f}",
-                         "foot": f"Across {len(usable)} pairs"},
-                        {"icon": "📆", "label": "Shared sessions",
-                         "value": f"{int(usable['n'].min()):,}",
-                         "foot": "Fewest for any pair in the window"},
-                    ])
-
-                ui.chart(charts.correlation_heatmap(cm, pal), key="risk_corr",
-                         config=PLOT_CONFIG, controls=False)
-                ui.note(
-                    "Correlation of DAILY RETURNS, not of prices: two rising price "
-                    "series correlate near 1.0 whatever they actually did, because "
-                    "both trend. 1.00 means the two moved in lockstep, 0.00 that they "
-                    "moved independently, negative that one tended to rise when the "
-                    "other fell — so the lower the number, the more a pair diversifies "
-                    "each other. Each pair uses only the sessions where both traded, "
-                    "so a company listed mid-window is measured over its own shorter "
-                    "overlap rather than dragging the rest down."
-                )
-                pairs_tbl = usable.assign(
-                    Pair=usable["sym_a"] + " · " + usable["sym_b"],
-                    Correlation=usable["correlation"].round(3),
-                    Sessions=usable["n"].astype(int),
-                )[["Pair", "Correlation", "Sessions"]].sort_values(
-                    "Correlation", ascending=False)
-                ui.table_view(
-                    "Correlation pairs — table view", pairs_tbl,
-                    column_config={
-                        "Correlation": st.column_config.NumberColumn(
-                            "Correlation", format="%.3f",
-                            help="1.00 moves in lockstep · 0.00 independent · "
-                                 "negative moves opposite"),
-                        "Sessions": st.column_config.NumberColumn(
-                            "Sessions", format="%d",
-                            help="Days both companies traded inside the window"),
-                    },
-                )
-
-        ui.section("Risk vs return", "All symbols over their own full history")
-        lb = dal.leaderboard()
-        scat = lb.dropna(subset=["ann_volatility", "cagr"])
-        if not scat.empty:
-            import plotly.graph_objects as go
-            f = go.Figure()
-            f.add_trace(go.Scatter(
-                x=scat["ann_volatility"], y=scat["cagr"], mode="markers+text",
-                text=scat["symbol"], textposition="top center",
-                textfont=dict(color=pal["text_secondary"], size=9),
-                marker=dict(size=10, color=pal["series"][0],
-                            line=dict(width=2, color=pal["surface"])),
-                customdata=scat[["name"]].values,
-                hovertemplate="<b>%{text}</b><br>Vol %{x:.1%} · CAGR %{y:.1%}<extra></extra>",
-            ))
-            f = charts.style(f, pal, y_title="CAGR", height=charts.H_TALL, crosshair=False,
-                             y_tickformat=".0%")
-            f.update_xaxes(title=dict(text="Annualized volatility",
-                                      font=dict(color=pal["muted"], size=11.5)),
-                           tickformat=".0%", showgrid=True, gridcolor=pal["gridline"])
-            ui.chart(f, key="risk_scatter", config=PLOT_CONFIG, controls=False)
-            ui.note(
-                "One point per symbol, over each symbol's own listed history — so the "
-                "horizon differs between points. Labels are drawn for every point here "
-                "because there are only ~49 and they are the identity channel."
-            )
-
-# ---------------------------------------------------------------------------
-# Portfolio — build a weighted basket and see what it would have done
-# ---------------------------------------------------------------------------
-if not DEV and section == "Portfolio":
-    ui.section("Portfolio simulator", "Build a basket and see how it would have performed")
-    ui.note(
-        "Pick holdings and set their weights. Every figure is computed from the "
-        "actual daily history of those companies over the selected window."
-    )
-
-    all_syms = list(directory["symbol"])
-    name_of = dict(zip(directory["symbol"], directory["name"]))
-    default = [s for s in ("AAPL", "MSFT", "NVDA", "AMZN") if s in all_syms]
-
-    holdings = st.multiselect(
-        "Holdings", all_syms, default=st.session_state.get("pf_syms", default),
-        key="pf_syms", max_selections=8,
-        format_func=lambda s: f"{s} — {name_of.get(s, s)}",
-        help="Up to 8 holdings",
-    )
-
-    if not holdings:
-        ui.empty_state("No holdings selected.",
-                       "Pick up to eight companies above to build a basket.")
-    else:
-        st.markdown('<div class="note" style="margin-top:6px;">Weights (%)</div>',
-                    unsafe_allow_html=True)
-        cols = st.columns(min(len(holdings), 4))
-        raw_w: dict[str, float] = {}
-        for i_h, sym in enumerate(holdings):
-            with cols[i_h % len(cols)]:
-                raw_w[sym] = st.number_input(
-                    sym, min_value=0.0, max_value=100.0,
-                    value=float(round(100 / len(holdings), 1)), step=5.0,
-                    key=f"pf_w_{sym}",
-                )
-
-        total_w = sum(raw_w.values())
-        if total_w <= 0:
-            ui.empty_state("Every holding is weighted zero.",
-                           "Give at least one holding a weight above 0% to run the "
-                           "simulation.", kind="warn")
-        else:
-            # Normalize so the basket always sums to 100%. Showing the raw total
-            # keeps that honest rather than silently rescaling behind the reader.
-            weights = tuple((s, w / total_w) for s, w in raw_w.items())
-            if abs(total_w - 100) > 0.05:
-                ui.note(
-                    f"Weights total {total_w:.1f}% — normalized to 100% for the "
-                    "simulation. Set them to sum to 100 to control it exactly."
-                )
-
-            stats = dal.portfolio_stats(weights, START, END)
-            pser = dal.portfolio_series(weights, START, END)
-
-            if stats is None or pser.empty:
-                ui.empty_state(
-                    "Not enough overlapping history for that combination.",
-                    "The basket needs sessions where every holding traded. Widen the "
-                    "window, or drop the most recently listed holding.", kind="warn")
-            else:
-                bench = dal.window_stats(INDEX_SYMBOL, START, END)
-                bench_ret = bench["period_return"] if bench is not None else None
-                diff = (stats["total_return"] - bench_ret) if bench_ret is not None else None
-
-                ui.kpi_cards([
-                    {"icon": "\U0001F4B0", "label": "Total return",
-                     "value": ui.fmt_pct(stats["total_return"], 1),
-                     "change": (f"{diff*100:+.1f} pts vs S&P 500" if diff is not None else None),
-                     "change_dir": ("up" if (diff or 0) >= 0 else "down"),
-                     "foot": f"{int(stats['sessions']):,} sessions"},
-                    {"icon": "\U0001F4C8", "label": "CAGR", "value": ui.fmt_pct(stats["cagr"], 1),
-                     "foot": "Annualized growth rate"},
-                    {"icon": "\u3030", "label": "Volatility",
-                     "value": ui.fmt_pct(stats["ann_volatility"], 1, signed=False),
-                     "foot": "Annualized, from daily moves"},
-                    {"icon": "\U0001F4C9", "label": "Max drawdown",
-                     "value": ui.fmt_pct(stats["max_drawdown"], 1),
-                     "change": "peak to trough", "change_dir": "down",
-                     "foot": "Deepest fall you'd have sat through"},
-                    {"icon": "\U0001F53A", "label": "Best day",
-                     "value": ui.fmt_pct(stats["best_day"], 1),
-                     "foot": f"Worst {ui.fmt_pct(stats['worst_day'], 1)}"},
-                ])
-
-                ui.section("Growth of the portfolio",
-                           f"Invested {pd.to_datetime(stats['first_date']):%b %d, %Y}")
-                fig_pf = charts.area_series(
-                    pser, "cumulative_return", pal, color_key="blue",
-                    y_title="Cumulative return", height=charts.H_PRIMARY,
-                    label=ui.fmt_pct(pser["cumulative_return"].iloc[-1], 0),
-                )
-                charts.add_events(fig_pf, pal, events.in_range(stats["first_date"], END))
-                ui.chart(fig_pf, key="pf_growth", config=PLOT_CONFIG)
-
-                # Benchmark on ONE shared axis (never a second y-scale). Both series
-                # are percentages from the same starting session, so they are directly
-                # comparable: the index window starts at the portfolio's first RETURN
-                # date, not its investable date, so neither series is a session ahead.
-                ui.section("Portfolio vs. the S&P 500", f"Both from {pd.to_datetime(pser['date'].iloc[0]):%b %d, %Y}")
-                bench_start = pser["date"].iloc[0].date().isoformat()
-                bench_ser = dal.cumulative_return(INDEX_SYMBOL, bench_start, END)
-                if bench_ser.empty:
-                    ui.empty_state("No index history overlaps this portfolio's window.",
-                                   "The benchmark comparison needs index sessions "
-                                   "inside the basket's own date range.", kind="warn")
-                else:
-                    ui.chart(
-                        charts.multi_series(
-                            {"Portfolio": pser.rename(columns={"cumulative_return": "v"}),
-                             "S&P 500": bench_ser.rename(columns={"cumulative_return": "v"})},
-                            pal, value_col="v", y_title="Cumulative return",
-                            height=charts.H_PRIMARY, tickformat=".0%", zero_line=True, hover_fmt=".1%",
-                        ),
-                        key="pf_vs_bench", config=PLOT_CONFIG, controls=False,
-                    )
-                    lead = stats["total_return"] - bench_ser["cumulative_return"].iloc[-1]
-                    ui.note(
-                        f"The basket finished {abs(lead) * 100:.1f} points "
-                        f"{'ahead of' if lead >= 0 else 'behind'} the index over this "
-                        "period. Both lines start at 0% on the same session and share "
-                        "one axis — the comparison is only honest if they do. The index "
-                        "is price-only here, as the portfolio is: neither includes "
-                        "dividends, so both are understated by a similar order."
-                    )
-
-                ui.section("Allocation", "What the basket is made of")
-                alloc_col, contrib_col = st.columns([1, 1.35])
-                mix = pd.DataFrame({
-                    "symbol": [s for s, _ in weights],
-                    "name": [name_of.get(s, s) for s, _ in weights],
-                    "weight": [w for _, w in weights],
-                })
-                with alloc_col:
-                    ui.chart(charts.allocation_donut(mix, pal), key="pf_alloc",
-                             config=PLOT_CONFIG, controls=False)
-
-                contrib = dal.portfolio_contribution(weights, START, END)
-                with contrib_col:
-                    if contrib.empty:
-                        ui.empty_state("No contribution data for this basket.",
-                                       "This needs at least one full session after the "
-                                       "investment date.", kind="warn")
-                    else:
-                        ui.chart(charts.contribution_bars(contrib, pal), key="pf_contrib",
-                                 config=PLOT_CONFIG, controls=False)
-
-                if not contrib.empty:
-                    ui.note(
-                        "Left: how the money is split. Right: how much of the "
-                        "portfolio's total return each holding actually produced, in "
-                        "percentage points. These are NOT weight x return — once "
-                        "returns compound, the parts of that product do not sum to the "
-                        "whole. Each bar is the holding's weighted daily return scaled "
-                        "by the portfolio's value going into that session, which does "
-                        "sum to the total exactly. A big weight on a mediocre performer "
-                        "and a small weight on a great one can produce the same bar; "
-                        "hover to see which."
-                    )
-                    contrib_tbl = contrib.assign(
-                        Ticker=contrib["symbol"], Company=contrib["name"],
-                        Weight=contrib["weight"] * 100,
-                        Return=contrib["holding_return"] * 100,
-                        Contribution=contrib["contribution"] * 100,
-                    )[["Ticker", "Company", "Weight", "Return", "Contribution"]]
-                    ui.table_view(
-                        "Contribution by holding — table view", contrib_tbl,
-                        column_config={
-                            "Weight": st.column_config.NumberColumn("Weight", format="%.1f%%"),
-                            "Return": st.column_config.NumberColumn(
-                                "Holding return", format="%+.1f%%",
-                                help="The holding's own compounded return over the "
-                                     "sessions the portfolio was invested"),
-                            "Contribution": st.column_config.NumberColumn(
-                                "Contribution", format="%+.2f%%",
-                                help="Points of the portfolio's total return; these sum "
-                                     "to the total"),
-                        },
-                        footer=(f"Sums to {contrib['contribution'].sum() * 100:+.2f}% · "
-                                f"portfolio total {stats['total_return'] * 100:+.2f}%"),
-                    )
-
-                ui.note_md(
-                    "**How this is modelled.** The portfolio is rebalanced back to "
-                    "target weights every day — the standard simple assumption. A "
-                    "real buy-and-hold basket drifts as winners grow, so its result "
-                    "would differ. Only sessions where every holding traded are "
-                    "counted, and the money goes in on the first such session, so a "
-                    "recently-listed holding sets the start date for the whole "
-                    "basket. Dividends are excluded, as everywhere else here."
-                )
-
-
-
-# ---------------------------------------------------------------------------
-# Intelligence — live company research and the ranking engine.
-#
-# NOT in WINDOWED_SECTIONS, and not all-time either: the engine scores fixed
-# trailing windows (1-year volatility, 12-1 momentum, trailing-twelve-month
-# fundamentals) that the methodology defines. Letting the shared date filter
-# reach it would change what "12-1 momentum" means from one visit to the next,
-# which is a different thing from re-baselining a comparison -- the scores
-# would stop being comparable to each other, not just across sections.
-#
-# The whole page lives in `market_intel.py`; this is the entry point, kept to a
-# single call so adding it changed no existing section.
-# ---------------------------------------------------------------------------
-if not DEV and section == "Intelligence":
-    market_intel.render(pal)
-
-
-# ---------------------------------------------------------------------------
-# About — the USER-facing one: what the numbers mean, never how it is built.
-# Architecture, SQL and performance all live in the Developer Center.
-# ---------------------------------------------------------------------------
-if not DEV and section == "About":
-    ui.section("About this data", "What these numbers mean, and what they don't")
-
-    ui.kpi_cards([
-        {"icon": "\U0001F4C5", "label": "History", "value": "25 years",
-         "foot": "Daily bars since 2001"},
-        {"icon": "\U0001F3E2", "label": "Companies", "value": "49",
-         "foot": "Large-cap US equities"},
-        {"icon": "\U0001F4C8", "label": "Benchmark", "value": "S&P 500", "small": True,
-         "foot": "Index used throughout"},
-        {"icon": "\U0001F553", "label": "Updated", "value": last_date.strftime("%b %d, %Y"),
-         "small": True, "foot": "Latest close in the dataset"},
-    ])
-
-    st.markdown(
-        """
-#### How to read the metrics
-
-| Metric | What it tells you |
-|---|---|
-| **Return** | Simple price change between the first and last day of your window. |
-| **CAGR** | The annual growth rate that compounds to that return. It makes windows of different lengths comparable. |
-| **Volatility** | How much daily prices swing, annualized. Higher means a rougher ride, not necessarily a worse outcome. |
-| **Max drawdown** | The deepest fall from a previous high. This is the loss you would have had to sit through. |
-| **52-week range** | The highest and lowest price of the past year — context for where the price sits today. |
-| **Moving average** | The average price over the last 50 or 200 sessions, used to read trend rather than noise. |
-
-**Why return alone isn't enough.** Two companies can post the same CAGR while
-one delivered it smoothly and the other through a 90% collapse and recovery.
-Volatility and drawdown describe that difference, which is why they sit beside
-every return figure here.
-
-#### Important limitations
-
-These genuinely affect how the numbers should be read:
-
-- **Dividends are excluded.** All figures are price returns, so long-run results
-  understate what a shareholder actually earned — meaningfully so for
-  high-dividend companies.
-- **Only companies that exist today are included.** Firms that failed or were
-  acquired are absent, which flatters long-run averages. This is called
-  survivorship bias and it affects every ranking on the site.
-- **Company histories differ in length.** Meta lists in 2012, Tesla in 2010.
-  All-time rankings show each company's start date and number of years so
-  unequal periods are visible rather than hidden.
-- **Sector figures are equal-weighted** and reported as the median member, so one
-  very large company cannot stand in for its whole sector.
-- **Market status follows the regular schedule** (weekdays, 09:30-16:00 ET).
-  Exchange holidays are not modelled.
-- **Partial years are marked.** The first and last calendar years of the window
-  are incomplete, so their bars are faded and asterisked.
-
-#### Not investment advice
-
-This is an analytical tool built to explore historical market data. Nothing here
-is a recommendation to buy or sell any security. Past performance does not
-predict future results.
-"""
-    )
-
-    ui.section("Data source")
-    ui.note(
-        "Daily open, high, low, close and volume from Yahoo Finance. Sector and "
-        "industry classifications are hand-maintained. Curious how it is built? "
-        "Switch to Developer Center in the top-right."
-    )
+        about.render(ctx)

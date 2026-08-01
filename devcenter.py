@@ -706,7 +706,7 @@ def _query_router() -> None:
     st.markdown("**Route log** — the path each question took this session.")
     log = st.session_state.get("route_log", [])
     if not log:
-        st.caption("No questions asked yet this session. Ask one in User Mode → Overview.")
+        st.caption("No questions asked yet this session. Ask one in User Mode → Research.")
     else:
         st.dataframe(
             pd.DataFrame(log[::-1]).rename(columns={

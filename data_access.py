@@ -563,3 +563,38 @@ def panel_row(version: str, symbol: str) -> pd.Series | None:
 @st.cache_data(ttl=TTL, show_spinner=False)
 def intel_universe(version: str) -> pd.DataFrame:
     return _read(queries.INTEL_UNIVERSE)
+
+
+# One company's recorded history from the WIDE universe. Same `version` key as
+# the rest of this block, for the same reason: the frame changes when the market
+# data does and not on a clock.
+@st.cache_data(ttl=TTL, show_spinner=False)
+def intel_history(version: str, symbol: str, start: str, end: str) -> pd.DataFrame:
+    """Five years of bars plus derived series for a non-core company.
+
+    Returns the same column names the core per-symbol views produce
+    (`daily_return`, `ma_50`, `ma_200`, `ann_volatility_21d`, `drawdown`,
+    `cumulative_return`), so the Research charts draw it without a second code
+    path -- the difference between the two records is the LENGTH of history,
+    which the page states, not the shape of the frame.
+    """
+    return _dated(_read(queries.INTEL_SYMBOL_HISTORY,
+                        {"symbol": symbol, "start": start, "end": end}))
+
+
+@st.cache_data(ttl=TTL, show_spinner=False)
+def intel_window_stats(version: str, symbol: str, start: str, end: str) -> pd.Series | None:
+    df = _read(queries.INTEL_SYMBOL_WINDOW_STATS,
+               {"symbol": symbol, "start": start, "end": end})
+    return None if df.empty else df.iloc[0]
+
+
+@st.cache_data(ttl=TTL, show_spinner=False)
+def intel_bounds(version: str, symbol: str) -> tuple[dt.date, dt.date] | None:
+    """First and last recorded session, or None when the symbol has no bars."""
+    df = _read(queries.INTEL_SYMBOL_BOUNDS, {"symbol": symbol})
+    if df.empty or not df.iloc[0]["first_date"]:
+        return None
+    row = df.iloc[0]
+    return (dt.date.fromisoformat(str(row["first_date"])),
+            dt.date.fromisoformat(str(row["last_date"])))
