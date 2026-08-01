@@ -105,13 +105,18 @@ INTENTS: list[Intent] = [
            extras={"index_bonus": 2.0}),
 ]
 
+# (chip label, question). The label is what the suggestion button shows and the
+# question is what lands in the Ask box -- they are separate because the two
+# have opposite goals. A full sentence has to be long enough for the router to
+# read, and short enough to sit on one line of a half-width button. It cannot be
+# both, so the button gets a scannable noun phrase and the box gets the sentence.
 EXAMPLES = [
-    "What stock had the highest trading volume?",
-    "Compare Apple and Microsoft.",
-    "Show me the biggest winners since 2020.",
-    "What company had the biggest drawdown?",
-    "Which sector performed best?",
-    "Which stock has been the most volatile?",
+    ("Highest volume", "What stock had the highest trading volume?"),
+    ("Apple vs Microsoft", "Compare Apple and Microsoft."),
+    ("Biggest winners", "Show me the biggest winners since 2020."),
+    ("Biggest drawdown", "What company had the biggest drawdown?"),
+    ("Best sector", "Which sector performed best?"),
+    ("Most volatile", "Which stock has been the most volatile?"),
 ]
 
 

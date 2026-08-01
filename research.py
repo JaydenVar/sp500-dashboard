@@ -1123,9 +1123,16 @@ def _ask_input() -> str:
         placeholder="e.g. “Which sector performed best?”",
     )
     with st.expander("Example questions"):
-        for i_e, ex in enumerate(ask.EXAMPLES):
-            st.button(ex, key=f"ask_ex_{i_e}", width="stretch",
-                      on_click=_use_example, args=(ex,))
+        # Two across rather than six down. Stacked full sentences made the open
+        # expander taller than the panel it sits beside, so opening it shoved the
+        # page around; a short label in a 2-up grid is three rows instead of six
+        # and each one is scannable at a glance. The sentence that actually gets
+        # asked is the tooltip, so nothing is hidden -- only deferred.
+        cols = st.columns(2)
+        for i_e, (label, question) in enumerate(ask.EXAMPLES):
+            with cols[i_e % 2]:
+                st.button(label, key=f"ask_ex_{i_e}", width="stretch",
+                          help=question, on_click=_use_example, args=(question,))
     return asked
 
 
