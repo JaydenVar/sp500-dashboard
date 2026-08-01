@@ -308,22 +308,34 @@ hr {{ border-color: var(--border); margin: 1.25rem 0; }}
 .mi-news a:hover {{ color: var(--accent); text-decoration: underline; }}
 .mi-news .src {{ color: var(--text-2); font-size: .78rem; margin-top: .15rem; }}
 
-/* ---------- Today's Opportunities cards ----------
-   `min-height` so four cards with names of different lengths keep their buttons
-   on one line; without it the row stair-steps and reads as a rendering fault.
-   `.pick-on` marks the company currently in the panel below. */
-.mi-card.pick {{
-  margin-bottom: .35rem; min-height: 92px;
-  border-color: var(--border); transition: border-color .14s ease;
+/* ---------- the Research entry row ----------
+   A label above each box, because two bare inputs side by side do not say which
+   one takes a ticker and which takes a sentence. */
+.rs-lbl {{
+  font-size: 0.685rem; font-weight: 640; color: var(--muted);
+  text-transform: uppercase; letter-spacing: .07em; margin: 2px 0 5px;
 }}
-.mi-card.pick:hover {{ border-color: var(--border-strong); }}
-.mi-card.pick-on {{
-  border-color: var(--accent);
-  box-shadow: inset 0 0 0 1px {_rgba(p['accent'], 0.35)};
+
+/* ---------- Today's Opportunities, one row ----------
+   This was four cards with a button under each -- ~250px of the first screen,
+   which pushed the searched company's own panel below the fold. The engine still
+   has to be visible without scrolling, so the strip shrank to a single row
+   instead of moving. The score band's color rides on each button's left edge
+   (the per-symbol rules are generated in research.py, since the key carries the
+   ticker); the score itself is in the label, so color is never the only carrier. */
+.pick-lead {{
+  display: flex; flex-direction: column; justify-content: center;
+  height: 100%; min-height: 38px; line-height: 1.25;
+  font-size: 0.685rem; font-weight: 680; color: var(--text-2);
+  letter-spacing: .07em;
 }}
-/* The disabled button on the active card is a STATE, not a broken control, so
-   it keeps the accent rather than going grey -- a greyed-out button beneath a
-   highlighted card reads as "this one is unavailable", the opposite of true. */
+.pick-lead span {{
+  font-size: 0.7rem; font-weight: 500; color: var(--muted);
+  letter-spacing: 0; text-transform: none;
+}}
+/* The disabled chip is a STATE, not a broken control, so it keeps the accent
+   rather than going grey -- a greyed-out button in a row of live ones reads as
+   "this one is unavailable", the opposite of what is true. */
 div[class*="st-key-rs_pick_"] button:disabled,
 div[class*="st-key-rs_pick_"] button:disabled:hover {{
   background: {_rgba(p['accent'], 0.14)} !important;
@@ -334,7 +346,7 @@ div[class*="st-key-rs_pick_"] button:disabled:hover {{
   transform: none !important;
 }}
 div[class*="st-key-rs_pick_"] button:disabled p {{
-  color: var(--accent) !important; font-weight: 640 !important;
+  color: var(--accent) !important; font-weight: 660 !important;
 }}
 
 /* ---------- tabs ---------- */

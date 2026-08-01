@@ -46,22 +46,33 @@ _FETCH_HINT = ("Run `python fetch_intel.py --all` to build the intelligence "
 # ---------------------------------------------------------------------------
 # Shared pieces
 # ---------------------------------------------------------------------------
-def score_chip(score: float, pal: dict) -> str:
-    """A 0-100 score as a colored chip.
+def band(score: float, pal: dict) -> tuple[str, str]:
+    """A 0-100 score's band as (color, label).
 
     Banded rather than a continuous gradient: a reader cannot resolve a
     continuous scale into a judgment, and the bands are stated in the
     methodology panel so the color is never the only carrier of the meaning --
-    the number sits inside the chip.
+    the number sits beside it everywhere it is used.
+
+    One function because the same banding is now drawn in two places (the
+    detail chip and the landing strip's chips) and two copies would drift.
     """
     if score >= 75:
-        color, label = pal["up"], "strong"
-    elif score >= 55:
-        color, label = pal["series"][0], "solid"
-    elif score >= 40:
-        color, label = pal["neutral_mid"], "mixed"
-    else:
-        color, label = pal["down"], "weak"
+        return pal["up"], "strong"
+    if score >= 55:
+        return pal["series"][0], "solid"
+    if score >= 40:
+        return pal["neutral_mid"], "mixed"
+    return pal["down"], "weak"
+
+
+def band_color(score: float, pal: dict) -> str:
+    return band(score, pal)[0]
+
+
+def score_chip(score: float, pal: dict) -> str:
+    """A 0-100 score as a colored chip."""
+    color, label = band(score, pal)
     return (f'<span class="mi-chip" style="background:{charts.wash(color, 0.16)};'
             f'color:{color};border:1px solid {charts.wash(color, 0.35)}" '
             f'title="{ui.esc(label)}">{score:.0f}</span>')

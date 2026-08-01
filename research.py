@@ -1093,25 +1093,42 @@ def _use_example(text: str) -> None:
 # ---------------------------------------------------------------------------
 # The landing page
 # ---------------------------------------------------------------------------
-def _ask_panel(ctx: Ctx) -> None:
-    """Ask the Market, directly under the company search.
+def _ask_input() -> str:
+    """The Ask the Market box, beside the company search rather than beneath it.
 
-    A reader arriving at the app either has a company in mind or a question, and
-    this is the one screen where both are answered. Every question goes through
-    the Query Router, which prefers an existing SQL template and only generates
-    SQL when none fits -- so a template answer is the same query the rest of the
-    app runs, and an answer can never disagree with the page beside it.
+    Both are entry points, so they belong on one row -- but stacked they read as
+    a single two-line form, and worse, the second box plus its six suggestion
+    buttons pushed the searched company's own panel below the fold. Searching a
+    company and then having to scroll past a question box to see the answer is
+    the opposite of what the search is for.
+
+    The suggestions live in a collapsed expander for the same reason: they are
+    useful the first time and cost a row of vertical space on every visit after.
     """
+    st.markdown('<div class="rs-lbl">Ask the market</div>', unsafe_allow_html=True)
     asked = st.text_input(
         "Ask the Market", key="ask_q", label_visibility="collapsed",
-        placeholder="…or ask the market a question — e.g. “What stock had the highest trading volume?”",
+        placeholder="e.g. “Which sector performed best?”",
     )
-    ex_cols = st.columns(len(ask.EXAMPLES))
-    for i_e, ex in enumerate(ask.EXAMPLES):
-        with ex_cols[i_e]:
+    with st.expander("Example questions"):
+        for i_e, ex in enumerate(ask.EXAMPLES):
             st.button(ex, key=f"ask_ex_{i_e}", width="stretch",
                       on_click=_use_example, args=(ex,))
+    return asked
 
+
+def _ask_answer(ctx: Ctx, asked: str) -> None:
+    """Render the answer to a question, if one was asked.
+
+    Split from the input so it can render at full width below the entry row --
+    and so it takes NO vertical space when nobody has asked anything, which is
+    the common case for a reader who came here to look up a company.
+
+    Every question goes through the Query Router, which prefers an existing SQL
+    template and only generates SQL when none fits -- so a template answer is the
+    same query the rest of the app runs, and an answer can never disagree with
+    the page beside it.
+    """
     if not (asked and asked.strip()):
         return
 
@@ -1136,7 +1153,7 @@ def _ask_panel(ctx: Ctx) -> None:
     else:
         ui.empty_state(routed.error,
                        "Try naming a company, a sector or a time period — "
-                       "or pick one of the suggestions above.", kind="info")
+                       "or open Example questions above.", kind="info")
     st.divider()
 
 
@@ -1145,54 +1162,70 @@ def _opportunities(ctx: Ctx, version: str) -> None:
 
     Fixed to Medium-Term / Balanced (see `market_intel.LANDING_HORIZON`) rather
     than inheriting the Intelligence page's filters, so the landing page says the
-    same thing on every visit. Each card loads that company into the panel below;
-    the button goes to the full board.
+    same thing on every visit. Each chip loads that company into the panel below.
+
+    ONE ROW, deliberately. This began as four cards with a button under each --
+    about 250px of the first screen, which pushed the searched company's own
+    panel out of view. The engine still has to be visible without scrolling, so
+    the strip stayed and shrank: symbol, score, and the company name on hover.
     """
     picks = market_intel.top_picks(version, N_PICKS)
     if picks.empty:
         return
 
-    head = st.columns([3.2, 1.2])
-    with head[0]:
-        ui.section("Today's Opportunities",
-                   f"Highest-scoring names · {market_intel.LANDING_HORIZON} · "
-                   f"{market_intel.LANDING_OBJECTIVE}")
-    with head[1]:
-        st.button("See full rankings →", key="rs_to_engine", width="stretch",
-                  on_click=_goto_engine,
-                  help="Every horizon, objective, risk band, sector and cap filter")
+    # The score band's color rides on the button itself. Streamlit gives each
+    # widget a `st-key-<key>` container class, and the key carries the symbol --
+    # so per-pick styling is a generated rule per symbol rather than a wrapper
+    # element the button could not live inside anyway.
+    rules = []
+    for _, row in picks.iterrows():
+        color = market_intel.band_color(float(row["overall_score"]), ctx.pal)
+        # A ticker can carry '.' or '-' (BRK-B, BF.B). Both are legal in a class
+        # NAME but '.' opens a class SELECTOR, so it has to be escaped here.
+        css_sym = str(row["symbol"]).replace(".", "\\.")
+        rules.append(
+            f"div.st-key-rs_pick_{css_sym} button:not(:disabled)"
+            f" {{ border-left: 3px solid {color} !important; }}")
+    st.markdown("<style>" + "".join(rules) + "</style>", unsafe_allow_html=True)
 
-    # The card that is currently loaded says so, and its button is disabled.
-    # Without this the strip looked identical before and after a click while the
-    # panel below silently changed underneath it -- the reader gets no
-    # confirmation that the thing they pressed is the thing they are now reading,
-    # and the pressed button keeps its focus styling, which reads as stuck.
     current = st.session_state.get("rs_symbol", DEFAULT_SYMBOL)
-    cols = st.columns(len(picks))
+    cols = st.columns([2.0] + [1.0] * len(picks) + [1.6])
+    with cols[0]:
+        st.markdown(
+            f'<div class="pick-lead">TODAY&#8217;S OPPORTUNITIES'
+            f'<span>{ui.esc(market_intel.LANDING_HORIZON)} · '
+            f'{ui.esc(market_intel.LANDING_OBJECTIVE)} · ranked in SQL</span></div>',
+            unsafe_allow_html=True)
+
+    # The chip that is currently loaded says so, and is disabled. Without it the
+    # strip looked identical before and after a click while the panel below
+    # silently changed underneath it -- no confirmation that the thing you
+    # pressed is the thing you are now reading -- and the pressed button kept its
+    # focus styling, which reads as stuck.
     for i, (_, row) in enumerate(picks.iterrows()):
         sym = str(row["symbol"])
         active = sym == current
-        with cols[i]:
-            st.markdown(
-                f'<div class="mi-card pick{" pick-on" if active else ""}">'
-                f'<h4>{ui.esc(sym)} '
-                f'{market_intel.score_chip(float(row["overall_score"]), ctx.pal)}</h4>'
-                f'<div class="note">{ui.esc(str(row["name"])[:34])}<br>'
-                f'{ui.esc(str(row.get("sector") or "—"))}</div></div>',
-                unsafe_allow_html=True)
+        with cols[i + 1]:
             st.button(
-                "Showing below" if active else "Research →",
+                f"{sym} · {float(row['overall_score']):.0f}",
                 key=f"rs_pick_{sym}", width="stretch", disabled=active,
                 on_click=_use_pick, args=(sym,),
-                help=(f"{sym} is the company in the panel below" if active
-                      else f"Load {sym} into the panel below"),
+                help=(f"{row['name']} — shown below"if active else
+                      f"{row['name']} · {row.get('sector') or 'sector unknown'} · "
+                      f"score {float(row['overall_score']):.0f}/100. "
+                      f"Load it into the panel below."),
             )
+    with cols[-1]:
+        st.button("See full rankings →", key="rs_to_engine", width="stretch",
+                  on_click=_goto_engine,
+                  help="Every horizon, objective, risk band, sector and cap "
+                       "filter, with the scoring SQL and a full metric breakdown")
 
     ui.note(
-        "Scores are 0–100 composites of a stock's percentile ranks on the metrics "
-        "that matter over a medium-term horizon — computed in SQL from reported "
-        "financials and price history, never by a model. They describe position "
-        "within the ranked universe, not a forecast, and they are not advice."
+        "0–100 composites of each stock's percentile ranks on the metrics that "
+        "matter over a medium-term horizon, computed in SQL from reported "
+        "financials and price history — never by a model. A position within the "
+        "ranked universe, not a forecast, and not advice."
     )
 
 
@@ -1206,20 +1239,35 @@ def _goto_engine() -> None:
 # Entry point
 # ---------------------------------------------------------------------------
 def render(ctx: Ctx) -> None:
+    """Reading order, which is the whole point of this page.
+
+    Search and the company it finds must be adjacent. Everything that is not the
+    answer to "what did I just search for" is either beside the search box (Ask
+    the Market), one compact row (Today's Opportunities), or absent until it has
+    something to say (the answer panel). The earlier stacking put a second text
+    box, six suggestion buttons and four cards between the search and its own
+    result, so finding a company meant scrolling past the tools you did not use.
+    """
     version = dal.intel_version()
 
-    ui.section("Research any US-listed company",
-               "NYSE, Nasdaq and NYSE American — or ask the market a question")
-    typed = st.text_input(
-        "Search", key="rs_query", label_visibility="collapsed",
-        placeholder="Search a ticker or company name — AAPL, Costco, Rocket Lab…",
-    )
-    symbol = _resolve(typed, version)
-    _ask_panel(ctx)
-    if symbol is None:
-        return
+    find, question = st.columns([1.35, 1.0])
+    with find:
+        st.markdown('<div class="rs-lbl">Research a company</div>',
+                    unsafe_allow_html=True)
+        typed = st.text_input(
+            "Search", key="rs_query", label_visibility="collapsed",
+            placeholder="Ticker or company name — AAPL, Costco, Rocket Lab…",
+        )
+        # Resolution renders here, under the box that caused it: a disambiguation
+        # list or a "nothing matches" belongs beside the input it is about.
+        symbol = _resolve(typed, version)
+    with question:
+        asked = _ask_input()
 
     _opportunities(ctx, version)
+    _ask_answer(ctx, asked)
+    if symbol is None:
+        return
 
     view = ui.sub_nav("Research", VIEWS, default=VIEWS[0])
     if view == "Snapshot":
