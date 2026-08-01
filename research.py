@@ -1299,14 +1299,28 @@ def _goto_engine() -> None:
 def render(ctx: Ctx) -> None:
     """Reading order, which is the whole point of this page.
 
-    Search and the company it finds must be adjacent. Everything that is not the
-    answer to "what did I just search for" is either beside the search box (Ask
-    the Market), one compact row (Today's Opportunities), or absent until it has
-    something to say (the answer panel). The earlier stacking put a second text
-    box, six suggestion buttons and four cards between the search and its own
-    result, so finding a company meant scrolling past the tools you did not use.
+    Search and the company it finds must be adjacent -- NOTHING goes between
+    them. Everything that is not the answer to "what did I just search for" sits
+    either beside the search box (Ask the Market), above it (Today's
+    Opportunities), or is absent until it has something to say (the answer
+    panel). The earlier stacking put a second text box, six suggestion buttons
+    and four cards between the search and its own result, so finding a company
+    meant scrolling past the tools you did not use.
+
+    Opportunities was the last thing still breaking that rule: one row, but a row
+    that separated the box you typed into from the panel that answered it, which
+    read as though the strip belonged to the search. Above the hero it is what it
+    actually is -- a standing offer you can take or scroll past on the way in.
     """
     version = dal.intel_version()
+
+    # Opportunities renders HERE but is built further down, because its active
+    # chip depends on the symbol `_resolve` returns and that has not happened
+    # yet at this point in the script. A container reserves the slot so the
+    # order things are drawn in can differ from the order they are computed in;
+    # building it here instead would leave the strip one rerun stale, still
+    # marking the previous company as loaded.
+    picks_slot = st.container()
 
     # The hero. One panel holding the greeting and both entry points, rather
     # than two loose inputs on the page background -- a landing page needs a
@@ -1336,7 +1350,8 @@ def render(ctx: Ctx) -> None:
         with question:
             asked = _ask_input()
 
-    _opportunities(ctx, version)
+    with picks_slot:
+        _opportunities(ctx, version)
     _ask_answer(ctx, asked)
     if symbol is None:
         return
