@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import datetime as dt
 import html
+import re
 import urllib.parse
 import zoneinfo
 
@@ -15,6 +16,7 @@ import pandas as pd
 import streamlit as st
 
 import charts
+import live_data
 
 
 def _market_tz():
@@ -43,6 +45,48 @@ CLOSE_T = dt.time(16, 0)
 
 def esc(v) -> str:
     return html.escape(str(v), quote=True)
+
+
+# ---------------------------------------------------------------------------
+# Remote images
+# ---------------------------------------------------------------------------
+# Every character legal in a URL, minus the four that could break out of a CSS
+# `url('...')`: quote, apostrophe, parenthesis, backslash. Whitespace is out for
+# the same reason.
+_IMG_URL = re.compile(r"https://[A-Za-z0-9._~:/?#\[\]@!$&*+,;=%-]{4,600}")
+
+
+def img_tile(url: str, cls: str) -> str:
+    """A remote image as a fixed-size tile, or "" when there is no usable URL.
+
+    Nothing rather than an empty tile, so a caller can drop this straight into a
+    row: a company with no mark and a story with no art both collapse to no
+    element at all, and the text beside them takes the full width instead of
+    indenting past a blank square.
+
+    A `background-image` rather than an `<img>`, because nothing here can catch a
+    failed load: Streamlit sanitizes the HTML it renders and strips inline event
+    handlers, so an `onerror` fallback never runs. A background that 404s paints
+    nothing and leaves the tile blank, which reads as "no picture"; a broken
+    `<img>` paints the browser's torn-page glyph, which reads as a broken page.
+    Provider art is missing often enough -- a thinly covered ticker, a wire story
+    with no photo -- that the difference is the whole design.
+
+    `esc` is not sufficient protection on its own here. The URL lands inside a
+    `style` attribute, so it has to survive both HTML *and* CSS parsing: a bare
+    apostrophe would close the url() and leave the rest to be read as CSS. Hence
+    an allowlist -- https only, URL characters only -- and anything failing it
+    drops out entirely rather than being escaped and hoped about.
+    """
+    clean = (url or "").strip()
+    if not _IMG_URL.fullmatch(clean):
+        return ""
+    return f'<span class="{cls}" style="background-image:url(\'{esc(clean)}\')"></span>'
+
+
+def logo_tile(symbol: str) -> str:
+    """A company's logo, sized for a header line."""
+    return img_tile(live_data.logo_url(symbol), "logo")
 
 
 # ---------------------------------------------------------------------------
@@ -560,9 +604,12 @@ def _quote_html(name: str, symbol: str, price, meta: str,
 
     return f"""
 <div class="quote">
-  <div style="flex:1 1 260px; min-width:0;">
-    <div class="q-name">{esc(name)}<span class="q-tkr">{esc(symbol)}</span></div>
-    <div class="q-meta">{esc(meta)}</div>
+  <div class="q-id">
+    {logo_tile(symbol)}
+    <div style="min-width:0;">
+      <div class="q-name">{esc(name)}<span class="q-tkr">{esc(symbol)}</span></div>
+      <div class="q-meta">{esc(meta)}</div>
+    </div>
   </div>
   <div style="text-align:right;">
     <div class="q-price">{fmt_price(price)}</div>

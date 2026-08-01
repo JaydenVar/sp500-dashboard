@@ -30,6 +30,7 @@ The bare `Mozilla/5.0` User-Agent is deliberate and is the same measured choice
 from __future__ import annotations
 
 import json
+import re
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -241,10 +242,59 @@ def news(symbol: str, limit: int = 6) -> list[dict]:
             "publisher": str(item.get("publisher") or ""),
             "link": str(item.get("link") or ""),
             "published": item.get("providerPublishTime"),
+            "thumb": _thumb(item),
         })
         if len(out) >= limit:
             break
     return out
+
+
+def _thumb(item: dict) -> str:
+    """The smallest thumbnail on a news item, or "" if it carries none.
+
+    Yahoo sends each story's art at two sizes: a 140x140 crop and an `original`
+    that runs up to 3840px wide. The row renders it at ~52px, so the crop is the
+    only sane pick -- reaching for `original` would pull megabytes across to
+    paint a thumbnail, and the browser would throw all of it away on the resize.
+
+    Smallest-wins rather than a hardcoded "140x140" tag because the tag set is
+    the provider's to change; picking by width still does the right thing if a
+    third size appears.
+    """
+    resolutions = ((item.get("thumbnail") or {}).get("resolutions")) or []
+    sized = [r for r in resolutions if r.get("url") and r.get("width")]
+    if not sized:
+        # No width to sort on: take the first URL there is rather than nothing.
+        return next((str(r["url"]) for r in resolutions if r.get("url")), "")
+    return str(min(sized, key=lambda r: r["width"])["url"])
+
+
+# ---------------------------------------------------------------------------
+# Company logos
+# ---------------------------------------------------------------------------
+# Unlike everything else in this module, logos are never fetched here -- this
+# hands back a URL and the browser loads it directly. That is deliberate: a logo
+# is decoration, and proxying one small image per company through the server
+# would add latency and a failure mode to a panel that must never block on one.
+#
+# Financial Modeling Prep's image endpoint needs no key. Measured 2026-08-01
+# against the stored universe plus names outside it (BRK-B, RKLB): every ticker
+# resolved, and an unknown one 404s cleanly instead of returning a placeholder
+# image -- which is what lets the CSS treat a miss as an empty tile.
+#
+# Clearbit, the other obvious candidate, is gone: `logo.clearbit.com` no longer
+# resolves in DNS. Do not "restore" it.
+LOGO_URL = "https://financialmodelingprep.com/image-stock/{symbol}.png"
+
+# Tickers only: letters, digits, dot, dash (BRK-B, BF.B). Anything else is not a
+# symbol, and refusing it here is what keeps an arbitrary string out of the URL.
+_TICKER = re.compile(r"[A-Z0-9.\-]{1,12}")
+
+
+def logo_url(symbol: str) -> str:
+    """The logo endpoint for a ticker, or "" when the input is not one."""
+    sym = (symbol or "").strip().upper()
+    return LOGO_URL.format(symbol=sym) if _TICKER.fullmatch(sym) else ""
 
 
 @st.cache_data(ttl=HISTORY_TTL, show_spinner=False)

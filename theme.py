@@ -377,6 +377,21 @@ hr {{ border-color: var(--border); margin: 1.25rem 0; }}
   content: ""; position: absolute; inset: 0 auto 0 0; width: 3px;
   background: var(--brand-grad);
 }}
+.q-id {{ flex: 1 1 260px; min-width: 0; display: flex; align-items: center; gap: 12px; }}
+/* The company mark, beside its name. `contain` and not `cover`: these arrive at
+   whatever aspect the company's own asset happens to be, and a wordmark cropped
+   to a square is unreadable in a way a letterform logo is not.
+
+   The white plate is the one place in this stylesheet that ignores the palette,
+   and it has to. Logos are supplied as dark ink on transparency, so on the dark
+   surface most of them would be invisible -- and the app cannot restyle art it
+   does not own. Every quote screen worth copying plates them the same way. */
+.logo {{
+  flex: 0 0 auto; width: 38px; height: 38px; border-radius: 10px;
+  background-color: #fff; background-repeat: no-repeat;
+  background-position: center; background-size: 74%;
+  border: 1px solid var(--border);
+}}
 .q-name {{ font-size: 1.12rem; font-weight: 680; letter-spacing: -0.022em; }}
 .q-tkr {{
   font-family: {MONO_STACK}; font-size: 0.71rem; font-weight: 680;
@@ -508,12 +523,26 @@ hr {{ border-color: var(--border); margin: 1.25rem 0; }}
   font-variant-numeric: tabular-nums;
 }}
 .mi-news {{
+  display: flex; align-items: flex-start; gap: .66rem;
   padding: .5rem .55rem; border-bottom: 1px solid var(--border);
   border-radius: var(--radius-sm); margin: 0 -.55rem;
   transition: background var(--t-fast) var(--ease);
 }}
 .mi-news:hover {{ background: var(--brand-soft); }}
 .mi-news:last-child {{ border-bottom: none; }}
+/* `min-width: 0` is what actually makes the headline wrap. A flex item's floor
+   is its content width, not zero, so without this a long unbroken headline
+   pushes the row wider than the card instead of breaking onto a second line. */
+.mi-news-txt {{ min-width: 0; }}
+/* Story art. `cover` here, unlike the logo plate above: this is a photograph, a
+   square crop of one is still a photograph, and letterboxing it inside the tile
+   would leave bars that draw more attention than the picture. */
+.mi-thumb {{
+  flex: 0 0 auto; width: 52px; height: 52px; border-radius: var(--radius-sm);
+  background-color: var(--surface-2); background-repeat: no-repeat;
+  background-position: center; background-size: cover;
+  border: 1px solid var(--border);
+}}
 .mi-news a {{ color: var(--text-1); text-decoration: none; font-weight: 620; font-size: .9rem; }}
 .mi-news a:hover {{ color: var(--brand); }}
 .mi-news .src {{ color: var(--muted); font-size: .765rem; margin-top: .2rem; }}

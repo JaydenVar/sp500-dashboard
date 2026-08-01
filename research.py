@@ -993,10 +993,15 @@ def _news_panel(symbol: str) -> None:
         if item.get("published"):
             when = dt.datetime.fromtimestamp(item["published"]).strftime("%b %d, %Y")
         link = ui.esc(item["link"])
+        # Empty string when the story carries no art, so the headline takes the
+        # full width rather than indenting past a blank square.
+        thumb = ui.img_tile(item.get("thumb", ""), "mi-thumb")
         out.append(
-            f'<div class="mi-news"><a href="{link}" target="_blank" rel="noopener">'
+            f'<div class="mi-news">{thumb}<div class="mi-news-txt">'
+            f'<a href="{link}" target="_blank" rel="noopener">'
             f'{ui.esc(item["title"])}</a>'
-            f'<div class="src">{ui.esc(item["publisher"])} · {ui.esc(when)}</div></div>')
+            f'<div class="src">{ui.esc(item["publisher"])} · {ui.esc(when)}</div>'
+            f'</div></div>')
     out.append("</div>")
     st.markdown("".join(out), unsafe_allow_html=True)
     st.markdown('<div class="note">Headlines are shown as published and are never '
