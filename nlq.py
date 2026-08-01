@@ -299,6 +299,66 @@ def generate_sql(question: str, schema_card: str, hint: str = "") -> str | None:
 # ---------------------------------------------------------------------------
 # Insight
 # ---------------------------------------------------------------------------
+_RANKING_SYSTEM = """\
+You explain why a stock ranked where it did on a quantitative screen. \
+The ranking is already computed and is not yours to revise.
+
+You are given: the stock, its horizon, its overall score, its category scores, \
+and the specific metrics on which it sits in the top or bottom quartile of the \
+screened universe. Every one of those numbers came from a SQL query over \
+reported financial and price data.
+
+Write two short paragraphs, plain language, for someone who knows markets but \
+not this screen:
+  1. Why it scored where it did -- name the categories and the specific metrics \
+     carrying the score, with their figures.
+  2. What the screen flags against it, and what the screen cannot see.
+
+Hard rules:
+  * Use ONLY the figures given to you. Never introduce a number, a ratio, a \
+    date, a product, an executive or a news event from your own knowledge -- \
+    you have not been shown the company's filings and your training data is \
+    older than this screen's inputs.
+  * Never restate, revise, second-guess or re-order the ranking. You explain a \
+    computed result; you do not produce one.
+  * Never give investment advice, a recommendation, a price target or a \
+    forecast. Describe what the metrics say, not what anyone should do.
+  * A percentile is a position within THIS screened universe, not a judgment \
+    about the company in absolute terms. Say so where it matters.
+  * If the metrics conflict (cheap but shrinking, profitable but levered), say \
+    so plainly rather than resolving it into a verdict."""
+
+
+@st.cache_data(ttl=_TTL, show_spinner=False)
+def explain_ranking(payload_json: str) -> str | None:
+    """Explain one already-computed ranking row. Never influences the ranking.
+
+    Takes the computed scores as JSON and returns prose about them. The
+    separation is structural, not a matter of prompt discipline: this function
+    is called AFTER `data_access.rankings` has returned an ordered board, its
+    return value is rendered as text and read by nothing, and no caller feeds it
+    back into a score. There is no code path by which a model response can
+    change a rank -- which is the same boundary the rest of the app draws
+    around generated SQL, one step further out.
+    """
+    client = _client()
+    if client is None:
+        return None
+    try:
+        response = client.messages.create(
+            model=MODEL,
+            max_tokens=1500,
+            system=_RANKING_SYSTEM,
+            output_config={"effort": "low"},
+            messages=[{"role": "user", "content": payload_json}],
+        )
+        if response.stop_reason == "refusal":
+            return None
+        return _text(response) or None
+    except Exception:
+        return None
+
+
 @st.cache_data(ttl=_TTL, show_spinner=False)
 def insight(question: str, table_csv: str, note: str = "") -> str | None:
     """One business sentence about a result set, or None if unavailable."""

@@ -32,6 +32,7 @@ Run: ./.venv/bin/python tests_ui.py
 
 from __future__ import annotations
 
+import ast
 import pathlib
 import sys
 
@@ -40,9 +41,28 @@ from streamlit.testing.v1 import AppTest
 import queries
 
 APP = str(pathlib.Path(__file__).parent / "app.py")
-SECTIONS = ["Overview", "Market", "Companies", "Journey",
-            "Performance", "Risk", "Portfolio", "About"]
 PRESETS = ["1M", "1Y", "10Y", "All Time"]
+
+
+def _sections() -> list[str]:
+    """Read `USER_SECTIONS` out of app.py rather than restating it here.
+
+    A hardcoded copy silently stops covering a new section the moment one is
+    added -- the sweep keeps passing while the new page is never rendered, which
+    is the same drift that left the scope banner naming two sections after a
+    third had been added. Parsed with `ast` because importing app.py would
+    execute the whole Streamlit script.
+    """
+    tree = ast.parse(pathlib.Path(APP).read_text())
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and any(
+                getattr(t, "id", "") == "USER_SECTIONS" for t in node.targets):
+            return [ast.literal_eval(e) for e in node.value.elts]
+    raise SystemExit("could not find USER_SECTIONS in app.py")
+
+
+SECTIONS = _sections()
+print(f"Sweeping {len(SECTIONS)} sections read from app.py: {', '.join(SECTIONS)}\n")
 
 _failures = 0
 
@@ -65,7 +85,15 @@ def run(label: str, state: dict) -> None:
 print("=== every section, every preset ===")
 for section in SECTIONS:
     for preset in PRESETS:
-        run(f"{section} · {preset}", {"section": section, "preset": preset})
+        state = {"section": section, "preset": preset}
+        # Intelligence opens on Live Research, which fetches from the provider.
+        # The preset sweep is about SQL paths, so it is pinned to the engine
+        # view here and the network path gets its own labelled cases below --
+        # otherwise a provider hiccup fails four cases that have nothing to do
+        # with it, and the sweep stops being a signal about this codebase.
+        if section == "Intelligence":
+            state["mi_view_mode"] = "Intelligence Engine"
+        run(f"{section} · {preset}", state)
 
 print("=== rolling-return horizons ===")
 for horizon in ("1Y", "3Y", "5Y", "10Y"):
@@ -114,6 +142,51 @@ run("Journey · playing", {"section": "Journey", "jrn_playing": True,
 run("Journey · at the first session",
     {"section": "Journey", "jrn_symbol": "TSLA — Tesla, Inc.",
      "jrn_slider": dt.date(2010, 6, 29)})
+
+print("=== market intelligence: engine controls ===")
+# Every horizon x objective generates a DIFFERENT scoring statement from the
+# registry, so this is the only thing that executes them against the real panel.
+# A weight edit that produces invalid SQL for one combination fails here.
+import ranking  # noqa: E402  (test-local)
+
+for horizon in ranking.HORIZONS:
+    run(f"Intelligence · {horizon}",
+        {"section": "Intelligence", "mi_view_mode": "Intelligence Engine",
+         "mi_horizon": horizon})
+
+for objective in ranking.OBJECTIVES:
+    run(f"Intelligence · objective {objective}",
+        {"section": "Intelligence", "mi_view_mode": "Intelligence Engine",
+         "mi_objective": objective})
+
+for risk in ranking.RISK_BANDS:
+    run(f"Intelligence · risk {risk}",
+        {"section": "Intelligence", "mi_view_mode": "Intelligence Engine",
+         "mi_risk": risk})
+
+# Filter combinations that legitimately return nothing must render an empty
+# state rather than index into an empty board.
+run("Intelligence · a filter set nothing can satisfy",
+    {"section": "Intelligence", "mi_view_mode": "Intelligence Engine",
+     "mi_risk": "Conservative", "mi_sectors": ["Energy"],
+     "mi_caps": ["Small (<$2B)"]})
+run("Intelligence · every cap band at once",
+    {"section": "Intelligence", "mi_view_mode": "Intelligence Engine",
+     "mi_caps": list(ranking.CAP_BANDS)})
+run("Intelligence · a single sector",
+    {"section": "Intelligence", "mi_view_mode": "Intelligence Engine",
+     "mi_sectors": ["Information Technology"]})
+
+print("=== market intelligence: live research (hits the provider) ===")
+# Isolated and labelled: these are the only cases in the suite that depend on an
+# external service being reachable.
+run("Intelligence · live research default", {"section": "Intelligence"})
+run("Intelligence · live research, candles",
+    {"section": "Intelligence", "mi_view": "Candles", "mi_span": "5Y"})
+run("Intelligence · live research, intraday span",
+    {"section": "Intelligence", "mi_span": "1D"})
+run("Intelligence · a ticker outside the stored universe",
+    {"section": "Intelligence", "mi_symbol": "RKLB"})
 
 print("=== developer center: every SQL Explorer entry executes ===")
 for i, name in enumerate(queries.EXPLORER):

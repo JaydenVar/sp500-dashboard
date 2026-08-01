@@ -89,7 +89,8 @@ data/cache/<symbol>.csv        (per-symbol, written on arrival)
 data/prices.csv.gz + data/symbols.csv     (committed to git, 7.6 MB)
         │  build_db.py — schema, views, materialized rollups, ANALYZE
         ▼
-data/sp500.db          SQLite: 2 tables · 6 views · 2 rollups
+data/sp500.db          SQLite: 9 tables · 10 views · 3 rollups
+                       (core: prices/symbols + events; intel: the wide universe)
         │  queries.py  — every SQL statement, each with an explanation
         │  data_access.py — the only module that opens a connection
         ▼
@@ -101,10 +102,15 @@ app.py + charts.py + components.py       layout and drawing only
 | Module | Owns | Deliberately does **not** |
 |---|---|---|
 | `fetch_data.py` | Network I/O, retries, caching | Any analysis |
+| `fetch_intel.py` | The wide universe: pick, price, fetch facts | Scoring anything |
+| `sec.py` | SEC EDGAR XBRL: raw reported figures | Deriving ratios |
+| `live_data.py` | Request-time quotes, charts, news | Feeding any score |
 | `build_db.py` | Schema, views, rollups, versioning | Serving queries |
 | `queries.py` | Every SQL statement + its explanation | Executing anything |
+| `ranking.py` | Metric registry, weights, **generating** scoring SQL | Arithmetic — no pandas, no numpy |
 | `data_access.py` | Connections, caching, timing | Formatting or drawing |
 | `charts.py` | Plotly construction and styling | Querying |
+| `market_intel.py` | The Intelligence page: layout and phrasing | **Computing any metric** |
 | `app.py` | Layout, routing, interaction | **Computing any metric** |
 
 #### Three design decisions worth defending

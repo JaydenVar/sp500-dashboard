@@ -1,0 +1,501 @@
+symbol,cik,name,sector,exchange
+JPM,19617,JPMORGAN CHASE & CO,Financials,NYSE
+BRK-B,1067983,BERKSHIRE HATHAWAY INC,Financials,NYSE
+BAC,70858,BANK OF AMERICA CORP /DE/,Financials,NYSE
+GOOGL,1652044,Alphabet Inc.,Information Technology,Nasdaq
+C,831001,CITIGROUP INC,Financials,NYSE
+MET,1099219,METLIFE INC,Financials,NYSE
+PRU,1137774,PRUDENTIAL FINANCIAL INC,Financials,NYSE
+T,732717,AT&T INC.,Communication Services,NYSE
+VZ,732712,VERIZON COMMUNICATIONS INC,Communication Services,NYSE
+UNH,731766,UNITEDHEALTH GROUP INC,Health Care,NYSE
+WMT,104169,Walmart Inc.,Consumer Discretionary,Nasdaq
+COF,927628,CAPITAL ONE FINANCIAL CORP,Financials,NYSE
+CVS,64803,CVS HEALTH Corp,Consumer Discretionary,NYSE
+CVX,93410,CHEVRON CORP,Energy,NYSE
+GM,1467858,General Motors Co,Consumer Discretionary,NYSE
+USB,36104,US BANCORP DE,Financials,NYSE
+APO,1858681,"Apollo Global Management, Inc.",Financials,NYSE
+CB,896159,Chubb Ltd,Financials,NYSE
+DIS,1744489,Walt Disney Co,Communication Services,NYSE
+PNC,713676,"PNC FINANCIAL SERVICES GROUP, INC.",Financials,NYSE
+SCHW,316709,SCHWAB CHARLES CORP,Financials,NYSE
+PFE,78003,PFIZER INC,Health Care,NYSE
+CI,1739940,Cigna Group,Health Care,NYSE
+BNY,1390777,Bank of New York Mellon Corp,Financials,NYSE
+BA,12927,BOEING CO,Industrials,NYSE
+ORCL,1341439,ORACLE CORP,Information Technology,NYSE
+NVDA,1045810,NVIDIA CORP,Information Technology,Nasdaq
+KKR,1404912,KKR & Co. Inc.,Financials,NYSE
+CHTR,1091667,"CHARTER COMMUNICATIONS, INC. /MO/",Communication Services,Nasdaq
+IBM,51143,INTERNATIONAL BUSINESS MACHINES CORP,Industrials,NYSE
+ET,1276187,Energy Transfer LP,Utilities,NYSE
+TSLA,1318605,"Tesla, Inc.",Consumer Discretionary,Nasdaq
+ELV,1156039,"Elevance Health, Inc.",Health Care,NYSE
+PG,80424,PROCTER & GAMBLE Co,Materials,NYSE
+ABBV,1551152,AbbVie Inc.,Health Care,NYSE
+AIG,5272,"AMERICAN INTERNATIONAL GROUP, INC.",Financials,NYSE
+TRV,86312,"TRAVELERS COMPANIES, INC.",Financials,NYSE
+STT,93751,STATE STREET CORP,Financials,NYSE
+PGR,80661,PROGRESSIVE CORP/OH/,Financials,NYSE
+MRK,310158,"Merck & Co., Inc.",Health Care,NYSE
+SO,92122,SOUTHERN CO,Utilities,NYSE
+COP,1163165,CONOCOPHILLIPS,Energy,NYSE
+ALL,899051,ALLSTATE CORP,Financials,NYSE
+AMP,820027,AMERIPRISE FINANCIAL INC,Financials,NYSE
+GE,40545,GENERAL ELECTRIC CO,Information Technology,NYSE
+PEP,77476,PEPSICO INC,Consumer Staples,Nasdaq
+PCG,1004980,PG&E Corp,Utilities,NYSE
+DELL,1571996,Dell Technologies Inc.,Information Technology,NYSE
+DE,315189,DEERE & CO,Industrials,NYSE
+KO,21344,COCA COLA CO,Consumer Staples,NYSE
+CAT,18230,CATERPILLAR INC,Industrials,NYSE
+LLY,59478,ELI LILLY & Co,Health Care,NYSE
+FCNCA,798941,FIRST CITIZENS BANCSHARES INC /DE/,Financials,Nasdaq
+EXC,1109357,EXELON CORP,Utilities,Nasdaq
+BMY,14272,BRISTOL MYERS SQUIBB CO,Health Care,NYSE
+CNC,1071739,CENTENE CORP,Health Care,NYSE
+COST,909832,COSTCO WHOLESALE CORP /NEW,Consumer Discretionary,Nasdaq
+CFG,759944,CITIZENS FINANCIAL GROUP INC/RI,Financials,NYSE
+AEP,4904,AMERICAN ELECTRIC POWER CO INC,Utilities,Nasdaq
+COR,1140859,"Cencora, Inc.",Health Care,NYSE
+AFL,4977,AFLAC INC,Financials,NYSE
+D,715957,"DOMINION ENERGY, INC",Utilities,NYSE
+KEY,91576,KEYCORP /NEW/,Financials,NYSE
+HIG,874766,"HARTFORD INSURANCE GROUP, INC.",Financials,NYSE
+NTRS,73124,NORTHERN TRUST CORP,Financials,Nasdaq
+PYPL,1633917,"PayPal Holdings, Inc.",Information Technology,Nasdaq
+EIX,827052,EDISON INTERNATIONAL,Utilities,NYSE
+OXY,797468,OCCIDENTAL PETROLEUM CORP /DE/,Energy,NYSE
+SRE,1032208,SEMPRA,Utilities,NYSE
+HPE,1645590,Hewlett Packard Enterprise Co,Industrials,NYSE
+CME,1156375,CME GROUP INC.,Financials,Nasdaq
+ACN,1467373,Accenture plc,Information Technology,NYSE
+MDLZ,1103982,"Mondelez International, Inc.",Consumer Staples,Nasdaq
+FISV,798354,FISERV INC,Information Technology,Nasdaq
+RJF,720005,RAYMOND JAMES FINANCIAL INC,Financials,NYSE
+HCA,860730,"HCA Healthcare, Inc.",Health Care,NYSE
+ADP,8670,AUTOMATIC DATA PROCESSING INC,Information Technology,Nasdaq
+LMT,936468,LOCKHEED MARTIN CORP,Industrials,NYSE
+ACGL,947484,ARCH CAPITAL GROUP LTD.,Financials,Nasdaq
+CAH,721371,CARDINAL HEALTH INC,Health Care,NYSE
+PLD,1045609,"Prologis, Inc.",Real Estate,NYSE
+UBER,1543151,"Uber Technologies, Inc",Information Technology,NYSE
+GD,40533,GENERAL DYNAMICS CORP,Industrials,NYSE
+DOW,1751788,DOW INC.,Materials,NYSE
+ED,1047862,CONSOLIDATED EDISON INC,Utilities,NYSE
+ADM,7084,Archer-Daniels-Midland Co,Consumer Staples,NYSE
+KMI,1506307,"KINDER MORGAN, INC.",Utilities,NYSE
+NFLX,1065280,NETFLIX INC,Communication Services,Nasdaq
+MCD,63908,MCDONALDS CORP,Consumer Discretionary,NYSE
+QCOM,804328,QUALCOMM INC/DE,Information Technology,Nasdaq
+HUM,49071,HUMANA INC,Health Care,NYSE
+FCX,831259,FREEPORT-MCMORAN INC,Materials,NYSE
+FANG,1539838,"Diamondback Energy, Inc.",Energy,Nasdaq
+CEG,1868275,Constellation Energy Corp,Utilities,Nasdaq
+ETR,65984,ENTERGY CORP /DE/,Utilities,NYSE
+NOC,1133421,NORTHROP GRUMMAN CORP /DE/,Health Care,NYSE
+MA,1141391,Mastercard Inc,Information Technology,NYSE
+BDX,10795,BECTON DICKINSON & CO,Health Care,NYSE
+ES,72741,EVERSOURCE ENERGY,Utilities,NYSE
+AER,1378789,AerCap Holdings N.V.,Information Technology,NYSE
+EOG,821189,EOG RESOURCES INC,Energy,NYSE
+AMT,1053507,AMERICAN TOWER CORP /MA/,Real Estate,NYSE
+FE,1031296,FIRSTENERGY CORP,Utilities,NYSE
+HPQ,47217,HP INC,Industrials,NYSE
+PCAR,75362,PACCAR INC,Consumer Discretionary,Nasdaq
+SYK,310764,STRYKER CORP,Health Care,NYSE
+WMB,107263,"WILLIAMS COMPANIES, INC.",Utilities,NYSE
+PEG,788784,PUBLIC SERVICE ENTERPRISE GROUP INC,Utilities,NYSE
+WELL,766704,WELLTOWER INC.,Real Estate,NYSE
+LNG,3570,"Cheniere Energy, Inc.",Utilities,NYSE
+O,726728,REALTY INCOME CORP,Real Estate,NYSE
+TSN,100493,"TYSON FOODS, INC.",Consumer Staples,NYSE
+LEN,920760,LENNAR CORP /NEW/,Industrials,NYSE
+MMM,66740,3M CO,Health Care,NYSE
+BX,1393818,Blackstone Inc.,Financials,NYSE
+FHN,36966,FIRST HORIZON CORP,Financials,NYSE
+CTVA,1755672,"Corteva, Inc.",Consumer Staples,NYSE
+XYZ,1512673,"Block, Inc.",Information Technology,NYSE
+BG,1996862,Bunge Global SA,Consumer Staples,NYSE
+WEC,783325,"WEC ENERGY GROUP, INC.",Utilities,NYSE
+DHI,882184,HORTON D R INC /DE/,Industrials,NYSE
+VST,1692819,Vistra Corp.,Utilities,NYSE
+WRB,11544,BERKLEY W R CORP,Financials,NYSE
+LYB,1489393,LyondellBasell Industries N.V.,Materials,NYSE
+OMC,29989,OMNICOM GROUP INC.,Information Technology,NYSE
+WBS,801337,WEBSTER FINANCIAL CORP,Financials,NYSE
+AEE,1002910,AMEREN CORP,Utilities,NYSE
+SBUX,829224,STARBUCKS CORP,Consumer Discretionary,Nasdaq
+CMI,26172,CUMMINS INC,Industrials,NYSE
+CNP,1130310,CENTERPOINT ENERGY INC,Utilities,NYSE
+APD,2969,"Air Products & Chemicals, Inc.",Materials,NYSE
+MELI,1099590,MERCADOLIBRE INC,Information Technology,Nasdaq
+PPL,922224,PPL Corp,Utilities,NYSE
+RSG,1060391,"REPUBLIC SERVICES, INC.",Utilities,NYSE
+DLR,1297996,"DIGITAL REALTY TRUST, INC.",Real Estate,NYSE
+INTU,896878,INTUIT INC.,Information Technology,Nasdaq
+EQT,33213,EQT Corp,Energy,NYSE
+ADBE,796343,ADOBE INC.,Information Technology,Nasdaq
+DVN,1090012,DEVON ENERGY CORP/DE,Energy,NYSE
+CMS,811156,CMS ENERGY CORP,Utilities,NYSE
+CBRE,1138118,"CBRE GROUP, INC.",Real Estate,NYSE
+BKNG,1075531,Booking Holdings Inc.,Industrials,Nasdaq
+TCOM,1269238,Trip.com Group Ltd,Information Technology,Nasdaq
+CRCL,1876042,"Circle Internet Group, Inc.",Financials,NYSE
+APH,820313,AMPHENOL CORP /DE/,Information Technology,NYSE
+MAR,1048286,MARRIOTT INTERNATIONAL INC /MD/,Consumer Discretionary,Nasdaq
+NRG,1013871,"NRG ENERGY, INC.",Utilities,NYSE
+GLW,24741,CORNING INC /NY,Materials,NYSE
+VICI,1705696,VICI PROPERTIES INC.,Real Estate,NYSE
+URI,1067701,"UNITED RENTALS, INC.",Information Technology,NYSE
+KMX,1170010,CARMAX INC,Consumer Discretionary,NYSE
+SPG,1063761,SIMON PROPERTY GROUP INC.,Real Estate,NYSE
+CAR,723612,"AVIS BUDGET GROUP, INC.",Consumer Discretionary,Nasdaq
+SE,1703399,Sea Ltd,Information Technology,NYSE
+EXE,895126,EXPAND ENERGY Corp,Energy,Nasdaq
+EVRG,1711269,"Evergy, Inc.",Utilities,Nasdaq
+BIIB,875045,BIOGEN INC.,Health Care,Nasdaq
+WTW,1140536,WILLIS TOWERS WATSON PLC,Financials,Nasdaq
+APTV,1521332,Aptiv PLC,Consumer Discretionary,NYSE
+TRGP,1389170,Targa Resources Corp.,Utilities,NYSE
+LYV,1335258,"Live Nation Entertainment, Inc.",Communication Services,NYSE
+WFC,72971,WELLS FARGO & COMPANY/MN,Financials,NYSE
+GS,886982,GOLDMAN SACHS GROUP INC,Financials,NYSE
+MS,895421,MORGAN STANLEY,Financials,NYSE
+CCI,1051470,CROWN CASTLE INC.,Real Estate,NYSE
+AMZN,1018724,AMAZON COM INC,Consumer Discretionary,Nasdaq
+HOOD,1783879,"Robinhood Markets, Inc.",Financials,Nasdaq
+MSFT,789019,MICROSOFT CORP,Information Technology,Nasdaq
+TFC,92230,TRUIST FINANCIAL CORP,Financials,NYSE
+QSR,1618756,Restaurant Brands International Inc.,Consumer Discretionary,NYSE
+MOS,1285785,MOSAIC CO,Materials,NYSE
+COIN,1679788,"Coinbase Global, Inc.",Financials,Nasdaq
+AAPL,320193,Apple Inc.,Information Technology,Nasdaq
+CTSH,1058290,COGNIZANT TECHNOLOGY SOLUTIONS CORP,Information Technology,Nasdaq
+CLF,764065,CLEVELAND-CLIFFS INC.,Materials,NYSE
+VTR,740260,"Ventas, Inc.",Real Estate,NYSE
+META,1326801,"Meta Platforms, Inc.",Information Technology,Nasdaq
+F,37996,FORD MOTOR CO,Consumer Discretionary,NYSE
+AXP,4962,AMERICAN EXPRESS CO,Financials,NYSE
+CMCSA,1166691,COMCAST CORP,Communication Services,Nasdaq
+ATO,731802,ATMOS ENERGY CORP,Utilities,NYSE
+LVS,1300514,LAS VEGAS SANDS CORP,Consumer Discretionary,NYSE
+FITB,35527,FIFTH THIRD BANCORP,Financials,NYSE
+HBAN,49196,HUNTINGTON BANCSHARES INC /MD/,Financials,Nasdaq
+TMUS,1283699,"T-Mobile US, Inc.",Communication Services,Nasdaq
+MTB,36270,M&T BANK CORP,Financials,NYSE
+TDG,1260221,TransDigm Group INC,Industrials,NYSE
+INTC,50863,INTEL CORP,Information Technology,Nasdaq
+NEE,753308,NEXTERA ENERGY INC,Utilities,NYSE
+ARES,1176948,Ares Management Corp,Financials,NYSE
+JNJ,200406,JOHNSON & JOHNSON,Health Care,NYSE
+DUK,1326160,Duke Energy CORP,Utilities,NYSE
+CG,1527166,Carlyle Group Inc.,Financials,Nasdaq
+IBKR,1381197,"Interactive Brokers Group, Inc.",Financials,Nasdaq
+EXR,1289490,Extra Space Storage Inc.,Real Estate,NYSE
+AVGO,1730168,Broadcom Inc.,Information Technology,Nasdaq
+RTX,101829,RTX Corp,Industrials,NYSE
+AZO,866787,AUTOZONE INC,Consumer Discretionary,NYSE
+RF,1281761,REGIONS FINANCIAL CORP,Financials,NYSE
+BLK,2012383,"BlackRock, Inc.",Financials,NYSE
+WCN,1318220,"Waste Connections, Inc.",Utilities,NYSE
+BRO,79282,"BROWN & BROWN, INC.",Financials,NYSE
+FERG,2011641,Ferguson Enterprises Inc. /DE/,Industrials,NYSE
+ICE,1571949,"Intercontinental Exchange, Inc.",Financials,NYSE
+LH,920148,LABCORP HOLDINGS INC.,Health Care,NYSE
+OVV,1792580,Ovintiv Inc.,Energy,NYSE
+LNT,352541,ALLIANT ENERGY CORP,Utilities,Nasdaq
+CSCO,858877,"CISCO SYSTEMS, INC.",Information Technology,Nasdaq
+SYF,1601712,Synchrony Financial,Financials,NYSE
+NLY,1043219,ANNALY CAPITAL MANAGEMENT INC,Real Estate,NYSE
+MOH,1179929,"MOLINA HEALTHCARE, INC.",Health Care,NYSE
+CRM,1108524,"Salesforce, Inc.",Information Technology,NYSE
+WBD,1437107,"Warner Bros. Discovery, Inc.",Communication Services,Nasdaq
+TMO,97745,THERMO FISHER SCIENTIFIC INC.,Health Care,NYSE
+KMB,55785,KIMBERLY CLARK CORP,Materials,Nasdaq
+AGNC,1423689,AGNC Investment Corp.,Real Estate,Nasdaq
+HD,354950,"HOME DEPOT, INC.",Consumer Discretionary,NYSE
+GLD,1222333,SPDR GOLD TRUST,Financials,NYSE
+JD,1549802,"JD.com, Inc.",Consumer Discretionary,Nasdaq
+CPAY,1175454,"CORPAY, INC.",Information Technology,NYSE
+V,1403161,VISA INC.,Information Technology,NYSE
+FUTU,1754581,Futu Holdings Ltd,Financials,Nasdaq
+MDT,1613103,Medtronic plc,Health Care,NYSE
+AMGN,318154,AMGEN INC,Health Care,Nasdaq
+FDX,1048911,FEDEX CORP,Industrials,NYSE
+DLTR,935703,"DOLLAR TREE, INC.",Consumer Discretionary,Nasdaq
+BBY,764478,BEST BUY CO INC,Consumer Discretionary,NYSE
+PSA,1393311,Public Storage,Real Estate,NYSE
+KHC,1637459,Kraft Heinz Co,Consumer Staples,Nasdaq
+ABT,1800,ABBOTT LABORATORIES,Health Care,NYSE
+HLT,1585689,Hilton Worldwide Holdings Inc.,Consumer Discretionary,NYSE
+LIN,1707925,LINDE PLC,Materials,Nasdaq
+MPC,1510295,Marathon Petroleum Corp,Energy,NYSE
+XYL,1524472,Xylem Inc.,Industrials,NYSE
+DHR,313616,DANAHER CORP /DE/,Health Care,NYSE
+PDD,1737806,PDD Holdings Inc.,Information Technology,Nasdaq
+MU,723125,MICRON TECHNOLOGY INC,Information Technology,Nasdaq
+LPLA,1397911,LPL Financial Holdings Inc.,Financials,Nasdaq
+DAL,27904,"DELTA AIR LINES, INC.",Industrials,NYSE
+AVB,915912,AVALONBAY COMMUNITIES INC,Real Estate,NYSE
+MCK,927653,MCKESSON CORP,Health Care,NYSE
+UAL,100517,"United Airlines Holdings, Inc.",Industrials,Nasdaq
+XEL,72903,XCEL ENERGY INC,Utilities,Nasdaq
+HON,773840,HONEYWELL INTERNATIONAL INC,Industrials,Nasdaq
+PSX,1534701,Phillips 66,Energy,NYSE
+AMD,2488,ADVANCED MICRO DEVICES INC,Information Technology,Nasdaq
+UPS,1090727,UNITED PARCEL SERVICE INC,Industrials,NYSE
+UNP,100885,UNION PACIFIC CORP,Industrials,NYSE
+AJG,354190,Arthur J. Gallagher & Co.,Financials,NYSE
+CPB,16732,CAMPBELL'S Co,Consumer Staples,Nasdaq
+PM,1413329,Philip Morris International Inc.,Consumer Staples,NYSE
+OKE,1039684,ONEOK INC /NEW/,Utilities,NYSE
+AAL,6201,American Airlines Group Inc.,Industrials,Nasdaq
+BIDU,1329099,"Baidu, Inc.",Information Technology,Nasdaq
+SPGI,64040,S&P Global Inc.,Information Technology,NYSE
+GILD,882095,"GILEAD SCIENCES, INC.",Health Care,Nasdaq
+TGT,27419,TARGET CORP,Consumer Discretionary,NYSE
+VLO,1035002,VALERO ENERGY CORP/TX,Energy,NYSE
+MRSH,62709,"MARSH & MCLENNAN COMPANIES, INC.",Financials,NYSE
+ALB,915913,ALBEMARLE CORP,Materials,NYSE
+ZTS,1555280,Zoetis Inc.,Health Care,NYSE
+GEV,1996810,GE Vernova Inc.,Information Technology,NYSE
+NEM,1164727,NEWMONT Corp /DE/,Materials,NYSE
+SHOP,1594805,SHOPIFY INC.,Information Technology,Nasdaq
+CRH,849395,CRH PUBLIC LTD CO,Materials,NYSE
+KDP,1418135,Keurig Dr Pepper Inc.,Consumer Staples,Nasdaq
+LDOS,1336920,"Leidos Holdings, Inc.",Information Technology,NYSE
+SLB,87347,SLB LIMITED/NV,Energy,NYSE
+RPRX,1802768,Royalty Pharma plc,Health Care,Nasdaq
+ECHO,1415404,EchoStar CORP,Communication Services,Nasdaq
+DTE,936340,DTE ENERGY CO,Utilities,NYSE
+KR,56873,KROGER CO,Consumer Discretionary,NYSE
+CCL,815097,Carnival Corp Ltd.,Industrials,NYSE
+GPN,1123360,GLOBAL PAYMENTS INC,Information Technology,NYSE
+AON,315293,Aon plc,Financials,NYSE
+LOW,60667,LOWES COMPANIES INC,Consumer Discretionary,NYSE
+VG,2007855,"Venture Global, Inc.",Utilities,NYSE
+ADI,6281,ANALOG DEVICES INC,Information Technology,Nasdaq
+TKO,1973266,"TKO Group Holdings, Inc.",Communication Services,NYSE
+WM,823768,WASTE MANAGEMENT INC,Utilities,NYSE
+NSC,702165,NORFOLK SOUTHERN CORP,Industrials,NYSE
+SW,2005951,Smurfit Westrock plc,Materials,NYSE
+CSX,277948,CSX CORP,Industrials,Nasdaq
+CF,1324404,"CF Industries Holdings, Inc.",Materials,NYSE
+SOFI,1818874,"SoFi Technologies, Inc.",Financials,Nasdaq
+EMR,32604,EMERSON ELECTRIC CO,Information Technology,NYSE
+MGM,789570,MGM Resorts International,Consumer Discretionary,NYSE
+BSX,885725,BOSTON SCIENTIFIC CORP,Health Care,NYSE
+LHX,202058,"L3HARRIS TECHNOLOGIES, INC. /DE/",Health Care,NYSE
+EA,712515,ELECTRONIC ARTS INC.,Information Technology,Nasdaq
+GAP,39911,GAP INC,Consumer Discretionary,NYSE
+ETN,1551182,Eaton Corp plc,Industrials,NYSE
+HII,1501585,"HUNTINGTON INGALLS INDUSTRIES, INC.",Industrials,NYSE
+TEVA,818686,TEVA PHARMACEUTICAL INDUSTRIES LTD,Health Care,NYSE
+JCI,833444,Johnson Controls International plc,Industrials,NYSE
+BKR,1701605,Baker Hughes Co,Industrials,Nasdaq
+RCL,884887,ROYAL CARIBBEAN CRUISES LTD,Industrials,NYSE
+REGN,872589,"REGENERON PHARMACEUTICALS, INC.",Health Care,Nasdaq
+NKE,320187,"NIKE, Inc.",Materials,NYSE
+MSTR,1050446,Strategy Inc,Financials,Nasdaq
+MKC,63754,MCCORMICK & CO INC,Consumer Staples,NYSE
+PAYX,723531,PAYCHEX INC,Industrials,Nasdaq
+EQIX,1101239,EQUINIX INC,Real Estate,Nasdaq
+CARR,1783180,CARRIER GLOBAL Corp,Industrials,NYSE
+RKT,1805284,"Rocket Companies, Inc.",Financials,NYSE
+AMAT,6951,APPLIED MATERIALS INC /DE,Information Technology,Nasdaq
+MO,764180,"ALTRIA GROUP, INC.",Consumer Staples,NYSE
+TXN,97476,TEXAS INSTRUMENTS INC,Information Technology,Nasdaq
+GEHC,1932393,GE HealthCare Technologies Inc.,Health Care,Nasdaq
+NUE,73309,NUCOR CORP,Materials,NYSE
+AR,1433270,ANTERO RESOURCES Corp,Energy,NYSE
+AWK,1410636,"American Water Works Company, Inc.",Utilities,NYSE
+NI,1111711,NISOURCE INC.,Utilities,NYSE
+TJX,109198,TJX COMPANIES INC /DE/,Consumer Discretionary,NYSE
+FIS,1136893,"Fidelity National Information Services, Inc.",Information Technology,NYSE
+KNX,1492691,Knight-Swift Transportation Holdings Inc.,Industrials,NYSE
+GIS,40704,GENERAL MILLS INC,Consumer Staples,NYSE
+ROP,882835,ROPER TECHNOLOGIES INC,Health Care,Nasdaq
+CZR,1590895,"Caesars Entertainment, Inc.",Consumer Discretionary,Nasdaq
+FSLR,1274494,"FIRST SOLAR, INC.",Information Technology,Nasdaq
+DG,29534,DOLLAR GENERAL CORP,Consumer Discretionary,NYSE
+NDAQ,1120193,"NASDAQ, INC.",Financials,Nasdaq
+LUV,92380,SOUTHWEST AIRLINES CO,Industrials,NYSE
+TSCO,916365,TRACTOR SUPPLY CO /DE/,Consumer Discretionary,Nasdaq
+PH,76334,Parker-Hannifin Corp,Industrials,NYSE
+IP,51434,INTERNATIONAL PAPER CO /NEW/,Materials,NYSE
+THC,70318,TENET HEALTHCARE CORP,Health Care,NYSE
+IQV,1478242,IQVIA HOLDINGS INC.,Industrials,NYSE
+CRWV,1769628,"CoreWeave, Inc.",Information Technology,Nasdaq
+DD,1666700,"DuPont de Nemours, Inc.",Materials,NYSE
+GLXY,1859392,Galaxy Digital Inc.,Financials,Nasdaq
+FLUT,1635327,Flutter Entertainment plc,Information Technology,NYSE
+KVUE,1944048,Kenvue Inc.,Materials,NYSE
+SYY,96021,SYSCO CORP,Industrials,NYSE
+FTI,1681459,TechnipFMC plc,Industrials,NYSE
+NXPI,1413447,NXP Semiconductors N.V.,Information Technology,Nasdaq
+HAL,45012,HALLIBURTON CO,Energy,NYSE
+MTZ,15615,MASTEC INC,Industrials,NYSE
+SHW,89800,SHERWIN WILLIAMS CO,Consumer Discretionary,NYSE
+STM,932787,STMicroelectronics N.V.,Information Technology,NYSE
+VRTX,875320,VERTEX PHARMACEUTICALS INC / MA,Health Care,Nasdaq
+STE,1757898,STERIS plc,Health Care,NYSE
+TEL,1385157,TE Connectivity plc,Industrials,NYSE
+AMRZ,2035989,Amrize Ltd,Materials,NYSE
+AFRM,1820953,"Affirm Holdings, Inc.",Financials,Nasdaq
+KEYS,1601046,"Keysight Technologies, Inc.",Health Care,NYSE
+ECL,31462,ECOLAB INC.,Materials,NYSE
+EXPE,1324424,"Expedia Group, Inc.",Industrials,Nasdaq
+BURL,1579298,"Burlington Stores, Inc.",Consumer Discretionary,NYSE
+NOW,1373715,"ServiceNow, Inc.",Information Technology,NYSE
+AMCR,1748790,Amcor plc,Consumer Discretionary,NYSE
+PANW,1327567,Palo Alto Networks Inc,Information Technology,Nasdaq
+BAX,10456,BAXTER INTERNATIONAL INC,Health Care,NYSE
+CMG,1058090,CHIPOTLE MEXICAN GRILL INC,Consumer Discretionary,NYSE
+FOXA,1754301,Fox Corp,Communication Services,Nasdaq
+ZBH,1136869,"ZIMMER BIOMET HOLDINGS, INC.",Health Care,NYSE
+STZ,16918,"CONSTELLATION BRANDS, INC.",Consumer Staples,NYSE
+ABNB,1559720,"Airbnb, Inc.",Information Technology,Nasdaq
+SBAC,1034054,SBA COMMUNICATIONS CORP,Real Estate,Nasdaq
+NCLH,1513761,Norwegian Cruise Line Holdings Ltd.,Industrials,NYSE
+MRVL,1835632,"Marvell Technology, Inc.",Information Technology,Nasdaq
+EME,105634,"EMCOR Group, Inc.",Industrials,NYSE
+CASY,726958,CASEYS GENERAL STORES INC,Consumer Discretionary,Nasdaq
+PWR,1050915,"QUANTA SERVICES, INC.",Industrials,NYSE
+SNPS,883241,SYNOPSYS INC,Information Technology,Nasdaq
+TT,1466258,Trane Technologies plc,Health Care,NYSE
+NTAP,1002047,"NetApp, Inc.",Information Technology,Nasdaq
+EQR,906107,EQUITY RESIDENTIAL,Real Estate,NYSE
+PPG,79879,PPG INDUSTRIES INC,Materials,NYSE
+LRCX,707549,LAM RESEARCH CORP,Industrials,Nasdaq
+CAG,23217,CONAGRA BRANDS INC.,Consumer Staples,NYSE
+WAB,943452,WESTINGHOUSE AIR BRAKE TECHNOLOGIES CORP,Industrials,NYSE
+ALK,766421,"ALASKA AIR GROUP, INC.",Industrials,NYSE
+SCCO,1001838,SOUTHERN COPPER CORP/,Materials,NYSE
+GPC,40987,GENUINE PARTS CO,Industrials,NYSE
+IRM,1020569,IRON MOUNTAIN INC,Real Estate,NYSE
+EL,1001250,ESTEE LAUDER COMPANIES INC,Materials,NYSE
+ISRG,1035267,INTUITIVE SURGICAL INC,Health Care,Nasdaq
+FLEX,866374,FLEX LTD.,Information Technology,Nasdaq
+WDC,106040,WESTERN DIGITAL CORP,Information Technology,Nasdaq
+APA,1841666,APA Corp,Energy,Nasdaq
+EBAY,1065088,EBAY INC,Information Technology,Nasdaq
+MLM,916076,MARTIN MARIETTA MATERIALS INC,Materials,NYSE
+JBL,898293,JABIL INC,Information Technology,NYSE
+FBTC,1852317,Fidelity Wise Origin Bitcoin Fund,Financials,CBOE
+BABA,1577552,Alibaba Group Holding Ltd,Information Technology,NYSE
+IR,1699150,Ingersoll Rand Inc.,Industrials,NYSE
+WDAY,1327811,"Workday, Inc.",Information Technology,Nasdaq
+PHM,822416,PULTEGROUP INC/MI/,Industrials,NYSE
+PFGC,1618673,Performance Food Group Co,Industrials,NYSE
+PR,1658566,Permian Resources Corp,Energy,NYSE
+RIG,1451505,Transocean Ltd.,Energy,NYSE
+SJM,91419,J M SMUCKER Co,Consumer Staples,NYSE
+VMC,1396009,Vulcan Materials CO,Materials,NYSE
+MSI,68505,"Motorola Solutions, Inc.",Information Technology,NYSE
+GBTC,1588489,Grayscale Bitcoin Trust ETF,Financials,NYSE
+HDB,1144967,HDFC BANK LTD,Financials,NYSE
+CPNG,1834584,"Coupang, Inc.",Consumer Discretionary,NYSE
+ICLR,1060955,ICON PLC,Industrials,Nasdaq
+HEI,46619,HEICO CORP,Industrials,NYSE
+NIO,1736541,NIO Inc.,Consumer Discretionary,NYSE
+ANET,1596532,"Arista Networks, Inc.",Information Technology,NYSE
+CL,21665,COLGATE PALMOLIVE CO,Materials,NYSE
+DGX,1022079,QUEST DIAGNOSTICS INC,Health Care,NYSE
+KLAC,319201,KLA CORP,Information Technology,Nasdaq
+LYFT,1759509,"Lyft, Inc.",Information Technology,Nasdaq
+WCC,929008,WESCO INTERNATIONAL INC,Industrials,NYSE
+ORLY,898173,O REILLY AUTOMOTIVE INC,Consumer Discretionary,Nasdaq
+STLD,1022671,STEEL DYNAMICS INC,Materials,Nasdaq
+MCO,1059556,MOODYS CORP /DE/,Information Technology,NYSE
+ITW,49826,ILLINOIS TOOL WORKS INC,Industrials,NYSE
+YUM,1041061,YUM BRANDS INC,Consumer Discretionary,NYSE
+RL,1037038,RALPH LAUREN CORP,Consumer Discretionary,NYSE
+DASH,1792789,"DoorDash, Inc.",Information Technology,Nasdaq
+AME,1037868,AMETEK INC/,Health Care,NYSE
+CDW,1402057,CDW Corp,Consumer Discretionary,Nasdaq
+GME,1326380,GameStop Corp.,Consumer Discretionary,NYSE
+ROST,745732,"ROSS STORES, INC.",Consumer Discretionary,Nasdaq
+SWKS,4127,"SKYWORKS SOLUTIONS, INC.",Information Technology,Nasdaq
+SMCI,1375365,"Super Micro Computer, Inc.",Information Technology,Nasdaq
+RIVN,1874178,"Rivian Automotive, Inc. / DE",Consumer Discretionary,Nasdaq
+ULTA,1403568,"Ulta Beauty, Inc.",Consumer Discretionary,Nasdaq
+MCHP,827054,MICROCHIP TECHNOLOGY INC,Information Technology,Nasdaq
+AA,1675149,Alcoa Corp,Materials,NYSE
+OSCR,1568651,"Oscar Health, Inc.",Health Care,NYSE
+NVR,906163,NVR INC,Industrials,NYSE
+OWL,1823945,BLUE OWL CAPITAL INC.,Financials,NYSE
+TDY,1094285,TELEDYNE TECHNOLOGIES INC,Health Care,NYSE
+TLN,1622536,Talen Energy Corp,Utilities,Nasdaq
+COHR,820318,COHERENT CORP.,Information Technology,NYSE
+GLDM,1618181,World Gold Trust,Financials,NYSE
+FTV,1659166,Fortive Corp,Health Care,NYSE
+TOL,794170,"Toll Brothers, Inc.",Industrials,NYSE
+WSO,105016,WATSCO INC,Industrials,NYSE
+RRX,82811,REGAL REXNORD CORP,Industrials,NYSE
+FWONK,1560385,Liberty Media Corp,Communication Services,Nasdaq
+TROW,1113169,PRICE T ROWE GROUP INC,Financials,Nasdaq
+APP,1751008,AppLovin Corp,Information Technology,Nasdaq
+SNDK,2023554,Sandisk Corp,Information Technology,Nasdaq
+USFD,1665918,US Foods Holding Corp.,Industrials,NYSE
+OC,1370946,Owens Corning,Materials,NYSE
+HAS,46080,"HASBRO, INC.",Consumer Discretionary,Nasdaq
+POOL,945841,POOL CORP,Industrials,Nasdaq
+DKS,1089063,"DICK'S SPORTING GOODS, INC.",Consumer Discretionary,NYSE
+ON,1097864,ON SEMICONDUCTOR CORP,Information Technology,Nasdaq
+EW,1099800,Edwards Lifesciences Corp,Health Care,NYSE
+LII,1069202,LENNOX INTERNATIONAL INC,Industrials,NYSE
+HSY,47111,HERSHEY CO,Consumer Staples,NYSE
+MRNA,1682852,"Moderna, Inc.",Health Care,Nasdaq
+DPZ,1286681,DOMINOS PIZZA INC,Industrials,Nasdaq
+CIEN,936395,CIENA CORP,Information Technology,NYSE
+HST,1070750,"HOST HOTELS & RESORTS, INC.",Real Estate,Nasdaq
+WYNN,1174922,WYNN RESORTS LTD,Consumer Discretionary,Nasdaq
+DOV,29905,DOVER Corp,Industrials,NYSE
+DRI,940944,DARDEN RESTAURANTS INC,Consumer Discretionary,NYSE
+MTD,1037646,METTLER TOLEDO INTERNATIONAL INC/,Health Care,NYSE
+EVR,1360901,Evercore Inc.,Financials,NYSE
+NXT,1852131,Nextpower Inc.,Information Technology,Nasdaq
+A,1090872,"AGILENT TECHNOLOGIES, INC.",Health Care,NYSE
+CHKP,1015922,CHECK POINT SOFTWARE TECHNOLOGIES LTD,Information Technology,Nasdaq
+COO,711404,"COOPER COMPANIES, INC.",Health Care,Nasdaq
+SAIA,1177702,SAIA INC,Industrials,Nasdaq
+TER,97210,"TERADYNE, INC",Health Care,Nasdaq
+TTMI,1116942,TTM TECHNOLOGIES INC,Information Technology,Nasdaq
+JAZZ,1232524,Jazz Pharmaceuticals plc,Health Care,Nasdaq
+EFX,33185,EQUIFAX INC,Information Technology,NYSE
+PODD,1145197,INSULET CORP,Health Care,Nasdaq
+ADSK,769397,"Autodesk, Inc.",Information Technology,Nasdaq
+FTAI,1590364,FTAI Aviation Ltd.,Information Technology,Nasdaq
+ZM,1585521,"Zoom Communications, Inc.",Information Technology,Nasdaq
+TTWO,946581,TAKE TWO INTERACTIVE SOFTWARE INC,Information Technology,Nasdaq
+NBIS,1513845,Nebius Group N.V.,Information Technology,Nasdaq
+ROK,1024478,"ROCKWELL AUTOMATION, INC",Health Care,NYSE
+BE,1664703,Bloom Energy Corp,Information Technology,NYSE
+TRU,1552033,TransUnion,Information Technology,NYSE
+WIX,1576789,Wix.com Ltd.,Information Technology,Nasdaq
+BLDR,1316835,"Builders FirstSource, Inc.",Consumer Discretionary,NYSE
+OTIS,1781335,Otis Worldwide Corp,Information Technology,NYSE
+AKAM,1086222,AKAMAI TECHNOLOGIES INC,Information Technology,Nasdaq
+HWM,4281,Howmet Aerospace Inc.,Materials,NYSE
+FIX,1035983,COMFORT SYSTEMS USA INC,Industrials,NYSE
+VRT,1674101,Vertiv Holdings Co,Information Technology,NYSE
+CVNA,1690820,CARVANA CO.,Consumer Discretionary,NYSE
+VRSN,1014473,VERISIGN INC/CA,Information Technology,Nasdaq
+TSEM,928876,TOWER SEMICONDUCTOR LTD,Information Technology,Nasdaq
+GRMN,1121788,GARMIN LTD,Health Care,NYSE
+FTNT,1262039,"Fortinet, Inc.",Information Technology,Nasdaq
+PEN,1321732,Penumbra Inc,Health Care,NYSE
+QXO,1236275,"QXO, Inc.",Industrials,NYSE
+CSGP,1057352,"COSTAR GROUP, INC.",Information Technology,Nasdaq
+CPRT,900075,COPART INC,Consumer Discretionary,Nasdaq
+CTAS,723254,CINTAS CORP,Consumer Discretionary,Nasdaq
+TWLO,1447669,TWILIO INC,Information Technology,NYSE
+MNDY,1845338,monday.com Ltd.,Information Technology,Nasdaq
+CRWD,1535527,"CrowdStrike Holdings, Inc.",Information Technology,Nasdaq
+TECH,842023,BIO-TECHNE Corp,Health Care,Nasdaq
+PKG,75677,PACKAGING CORP OF AMERICA,Materials,NYSE
+OKTA,1660134,"Okta, Inc.",Information Technology,Nasdaq
+CDNS,813672,CADENCE DESIGN SYSTEMS INC,Information Technology,Nasdaq
+XOM,2115436,ExxonMobil Holdings Corp,Energy,NYSE

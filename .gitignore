@@ -11,3 +11,14 @@ data/prices.csv
 # fetch_data.py run resumable. Regenerated on demand.
 data/cache/
 data/*.db.building
+
+# The same idea for the intelligence universe, and much larger: ~135MB of
+# per-symbol price CSVs plus the raw SEC companyfacts extracts, kept only so a
+# rate-limited fetch_intel.py run resumes instead of restarting.
+#
+# The three ARTIFACTS it produces are committed, because a fresh deploy rebuilds
+# the database from them and cannot run a 15-minute fetch on first request:
+#   data/intel_universe.csv       (the ranked universe + SIC sectors)
+#   data/intel_prices.csv.gz      (5y daily bars)
+#   data/intel_fundamentals.csv.gz(SEC XBRL figures, as filed)
+data/intel_cache/

@@ -1552,3 +1552,126 @@ EXPLORER.update({
         ),
     },
 })
+
+
+# ---------------------------------------------------------------------------
+# Market Intelligence
+# ---------------------------------------------------------------------------
+# The scoring statement itself is NOT here: it is generated from the metric
+# registry by `ranking.score_sql`, because a hand-written copy would have to be
+# re-edited every time a weight moved and would drift out of step with the
+# registry silently. These are the fixed reads around it.
+
+INTEL_STATUS = """
+SELECT
+    (SELECT COUNT(*) FROM intel_symbols)                                   AS n_symbols,
+    (SELECT COUNT(DISTINCT symbol) FROM intel_prices)                      AS n_priced,
+    (SELECT COUNT(*) FROM intel_fundamentals WHERE asof IS NOT NULL)       AS n_fundamentals,
+    (SELECT COUNT(*) FROM intel_analyst)                                   AS n_analyst,
+    (SELECT MAX(date) FROM intel_prices)                                   AS last_date,
+    (SELECT MAX(asof) FROM intel_fundamentals)                             AS fundamentals_asof
+"""
+INTEL_STATUS_NOTE = (
+    "What the intelligence universe currently holds: how many symbols are "
+    "priced, how many carry SEC fundamentals, and the newest session and filing "
+    "date behind the rankings."
+)
+
+INTEL_SECTORS = """
+SELECT sector, COUNT(*) AS n
+FROM metric_panel
+WHERE sector IS NOT NULL AND sector <> ''
+GROUP BY sector
+HAVING COUNT(*) >= 3
+ORDER BY sector
+"""
+INTEL_SECTORS_NOTE = (
+    "Sectors available to filter on. A sector with fewer than three companies is "
+    "withheld: valuation metrics are ranked WITHIN sector, and a percentile "
+    "drawn from two peers is arithmetic rather than information."
+)
+
+INTEL_PANEL_ROW = """
+SELECT * FROM metric_panel WHERE symbol = :symbol
+"""
+INTEL_PANEL_ROW_NOTE = (
+    "Every stored metric for one company, as the ranking engine sees it."
+)
+
+INTEL_UNIVERSE = """
+SELECT symbol, name, sector, exchange, last_close, market_cap, dollar_volume,
+       vol_1y, last_date
+FROM metric_panel
+ORDER BY market_cap DESC NULLS LAST
+"""
+INTEL_UNIVERSE_NOTE = (
+    "The ranked universe with its size and liquidity, largest first."
+)
+
+
+# Registered here rather than in the EXPLORER literal above for the same reason
+# the Journey entries are: these read the intel_* tables, which are built from a
+# separate artifact and are empty on a clone that has not run fetch_intel.py.
+EXPLORER.update({
+    "Intelligence universe coverage": {
+        "question": "What does the ranking engine actually have data for?",
+        "sql": INTEL_STATUS,
+        "params": [],
+        "read_path": "Four correlated aggregates",
+        "read_path_note": "Counts only; no scan of the price rows",
+        "indexes": [],
+        "objects": ["intel_symbols", "intel_prices", "intel_fundamentals", "intel_analyst"],
+        "powers": ["Intelligence → the universe line under Methodology"],
+        "explain": (
+            "**What it does.** Reports how much of the intelligence universe is "
+            "priced, how much carries SEC fundamentals, and how fresh both are.\n\n"
+            "**Why it exists.** The ranking board is meaningless without knowing "
+            "what it ranked. A page that shows fifty confident scores while forty "
+            "of the universe's names silently lack fundamentals is reporting data "
+            "availability as if it were opportunity — so the coverage figures are "
+            "queried and shown rather than assumed."
+        ),
+    },
+    "Intelligence sector coverage": {
+        "question": "Which sectors have enough companies to rank within?",
+        "sql": INTEL_SECTORS,
+        "params": [],
+        "read_path": "Indexed group-by",
+        "read_path_note": "idx_metric_panel_sector",
+        "indexes": ["idx_metric_panel_sector (sector)"],
+        "objects": ["metric_panel"],
+        "powers": ["Intelligence → the Sector filter"],
+        "explain": (
+            "**What it does.** Lists the sectors offered as filters, with their "
+            "company counts.\n\n"
+            "**Why the HAVING clause.** Valuation metrics are ranked *within* "
+            "sector, so a sector with two members produces percentiles of 0% and "
+            "100% whatever the two companies are actually worth. Below three "
+            "members the sector is withheld from the filter rather than offered "
+            "with a percentile that is arithmetic instead of information."
+        ),
+    },
+    "Intelligence metric panel for one company": {
+        "question": "What does the ranking engine know about a single company?",
+        "sql": INTEL_PANEL_ROW,
+        "params": ["symbol"],
+        "read_path": "Primary-key lookup",
+        "read_path_note": "idx_metric_panel (symbol)",
+        "indexes": ["idx_metric_panel (symbol)"],
+        "objects": ["metric_panel"],
+        "powers": ["Intelligence → the metric breakdown panel"],
+        "explain": (
+            "**What it does.** Returns every stored metric for one symbol — the "
+            "exact row the scoring SQL reads.\n\n"
+            "**Why it is a materialized table.** `metric_panel` rolls a dozen "
+            "window aggregates over every session of every symbol in the "
+            "universe. As a live view the ranking board would recompute all of "
+            "it on every filter change; the inputs only move when the database "
+            "is rebuilt, so there is nothing to invalidate. Same reasoning as "
+            "`symbol_stats` and `latest_quote`.\n\n"
+            "**Note.** The symbol picker lists the 50-symbol core universe. The "
+            "intelligence universe is wider, and every core symbol is forced "
+            "into it, so every option here resolves."
+        ),
+    },
+})

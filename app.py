@@ -30,6 +30,7 @@ import data_access as dal
 import devcenter
 import events
 import journey
+import market_intel
 import nlq
 import queries
 import router
@@ -72,7 +73,7 @@ WINDOWED_SECTIONS = ("Overview", "Market", "Companies", "Risk", "Portfolio")
 # "Performance and About", which silently became wrong the moment a third
 # all-time section was added.
 USER_SECTIONS = ["Overview", "Market", "Companies", "Journey",
-                 "Performance", "Risk", "Portfolio", "About"]
+                 "Performance", "Risk", "Portfolio", "Intelligence", "About"]
 ALLTIME_SECTIONS = tuple(s for s in USER_SECTIONS if s not in WINDOWED_SECTIONS
                          and s != "About")
 
@@ -246,9 +247,14 @@ START, END = start_d.isoformat(), end_d.isoformat()
 _named = f"{', '.join(WINDOWED_SECTIONS[:-1])} and {WINDOWED_SECTIONS[-1]}"
 _alltime = f"{' and '.join(ALLTIME_SECTIONS)}" if len(ALLTIME_SECTIONS) < 3 else (
     f"{', '.join(ALLTIME_SECTIONS[:-1])} and {ALLTIME_SECTIONS[-1]}")
+# "are always all-time" was accurate while every unwindowed section really was
+# all-time. Intelligence is not: it ranks on fixed trailing windows (1y
+# volatility, 12-1 momentum, TTM fundamentals), which is neither the shared
+# window nor all-time. Saying "all-time" would misdescribe it in exactly the way
+# the comment above warns about, so the banner now states only what it governs.
 scope_note = (
     "seeds the SQL Explorer window" if DEV
-    else f"applies to {_named} · {_alltime} and About are always all-time"
+    else f"applies to {_named} · not to {_alltime} or About"
 )
 st.markdown(
     f'<div class="note">'
@@ -1441,6 +1447,23 @@ if not DEV and section == "Portfolio":
                     "basket. Dividends are excluded, as everywhere else here."
                 )
 
+
+
+# ---------------------------------------------------------------------------
+# Intelligence — live company research and the ranking engine.
+#
+# NOT in WINDOWED_SECTIONS, and not all-time either: the engine scores fixed
+# trailing windows (1-year volatility, 12-1 momentum, trailing-twelve-month
+# fundamentals) that the methodology defines. Letting the shared date filter
+# reach it would change what "12-1 momentum" means from one visit to the next,
+# which is a different thing from re-baselining a comparison -- the scores
+# would stop being comparable to each other, not just across sections.
+#
+# The whole page lives in `market_intel.py`; this is the entry point, kept to a
+# single call so adding it changed no existing section.
+# ---------------------------------------------------------------------------
+if not DEV and section == "Intelligence":
+    market_intel.render(pal)
 
 
 # ---------------------------------------------------------------------------

@@ -135,19 +135,71 @@ the palette maps to a color.
 
 ```
 fetch_data.py   Yahoo Finance chart API  ->  data/prices.csv + data/symbols.csv
+fetch_intel.py  the wide universe: pick it, price it, fetch its SEC facts
+sec.py          SEC EDGAR XBRL client — fundamentals and share counts
+live_data.py    Yahoo quote/search/news — the only request-time network calls
 build_db.py     CSVs  ->  SQLite: tables, views, materialized rollups
 queries.py      every SQL statement, each paired with an explanation
+ranking.py      the metric registry and the scoring SQL it generates
 data_access.py  cached query layer (st.cache_data) — the only place SQL is run
 charts.py       Plotly builders + one shared styling function
 components.py   header, KPI cards, quote strip, chart + table helpers
 events.py       market timeline events with hover explanations
 journey.py      Stock Journey narrative layer — picks and phrases facts, no math
+market_intel.py Market Intelligence page — research panel + ranking board
 ask.py          natural-language intent routing (no LLM)
 answers.py      renders an answer per intent from existing queries
 devcenter.py    the Developer Center, incl. SQL Explorer and Interview Mode
 theme.py        validated palettes and the whole stylesheet
 app.py          layout and interaction only — no analysis
 ```
+
+### Market Intelligence
+
+Two things on one page.
+
+**Live company research** works for any US-listed stock on NYSE, Nasdaq or NYSE
+American — not just the 50 in the core universe. Search by ticker or name, then
+a live quote, an interactive chart across eight spans, the company profile,
+key financials from SEC filings, valuation, performance and recent headlines.
+
+**The intelligence engine** ranks the wide universe on objective metrics across
+three horizons, filterable by risk tolerance, investment objective, sector and
+market cap. Every result carries its overall score, per-category scores, the
+metrics it is strongest and weakest on, a full metric breakdown, and an
+explanation of why it landed there.
+
+The scoring is deliberately auditable:
+
+- **Percentile rank within the filtered universe**, not z-scores. Financial
+  cross-sections are heavily skewed, and one 400x P/E moves a mean and a standard
+  deviation enough to compress everything else toward the middle. A percentile
+  cannot be moved by an outlier at all.
+- **Valuation ranks within sector.** Pooling P/E across utilities and software
+  ranks sectors, not companies.
+- **Missing data renormalizes; it is never zero-filled.** A stock with no
+  fundamentals would otherwise score 0 on every valuation metric and rank as
+  expensive rather than as unknown — which turns the board into a ranking of data
+  availability. Below 60% metric coverage a stock is excluded and told why.
+- **Horizon weights follow the published anomaly literature.** One-month return
+  is scored *inverted* (Jegadeesh 1990, short-horizon reversal); medium-term is
+  anchored on 12-1 momentum, which skips the most recent month precisely to avoid
+  that reversal (Jegadeesh & Titman 1993); five-year return is inverted again on
+  the long board (De Bondt & Thaler 1985).
+- **The AI never ranks.** Scores come from SQL over reported data. The model is
+  handed the finished result and asked to explain it — and the page works
+  without a key, falling back to an explanation assembled from the same figures.
+
+Weights and metrics live in two registries in `ranking.py`, which *generates* the
+scoring SQL. Retuning a weight or adding a metric is a registry edit plus one
+column in the `metric_panel` view — the scoring logic is never touched. The
+generated statement for the current board is shown under **Methodology**.
+
+Rankings refresh automatically when market data does: `build_db` stamps a
+`data_version` derived from the data itself, every cached ranking read takes it
+as an argument, and a new load is therefore a cache miss. A TTL cannot do this
+job — it expires on a clock rather than on the data, so it both recomputes
+unchanged boards and serves stale ones after a refresh.
 
 ### The SQL layer
 
@@ -166,6 +218,20 @@ app.py          layout and interaction only — no analysis
 | `company_events` | table | curated company history, loaded from `data/company_events.json` |
 | `event_categories` | table | the category registry that drives event color and labelling |
 | `market_events` | table | the market timeline, mirrored from `events.py` so it can join to prices |
+| `intel_symbols` | table | the wide universe: ticker, CIK, SIC-derived sector, exchange |
+| `intel_prices` | table | 5 years of daily bars for that universe |
+| `intel_fundamentals` | table | raw SEC XBRL figures, as filed — no ratios |
+| `intel_analyst` | table | consensus data; empty unless a provider key is set |
+| `intel_seq` | view | sessions numbered backwards from the latest, so "22 sessions ago" is a join key rather than a date offset |
+| `intel_returns` | view | daily returns for the wide universe, likewise numbered |
+| `intel_price_metrics` | view | every price-derived metric: momentum, trend, RSI, volatility, beta, drawdown, liquidity |
+| `intel_fundamental_metrics` | view | every ratio, derived from the raw figures — negative-denominator cases NULLed rather than computed |
+| `metric_panel` | **materialized** | one row per symbol, one column per registered metric — what the ranking engine scores |
+
+The intel tables are deliberately **separate from `prices`/`symbols`**. Those
+feed the leaderboard, sector medians and period movers; dropping 500 five-year
+names into them would silently change every one of those figures on pages that
+have nothing to do with this feature.
 
 ### Performance
 
@@ -210,9 +276,30 @@ Things this data genuinely cannot support, stated rather than papered over:
 
 - **Price returns, not total returns.** Dividends are excluded, so long-run
   figures understate what a shareholder actually earned.
-- **No market cap.** It needs share counts, and every free endpoint that serves
-  them is auth-gated (401/404). Rather than hardcode a figure that goes stale,
-  the app shows average dollar turnover, computed from data actually present.
+- **Market cap exists only on the Intelligence page.** It needs share counts, and
+  every *Yahoo* endpoint serving them is auth-gated (401). SEC EDGAR serves them
+  from the filings themselves, so the intelligence universe computes cap as
+  shares outstanding × latest close on every rebuild. The core 50-symbol pages
+  still show average dollar turnover instead, because they are built from the
+  price artifact alone and a figure that appears on one page and not another is
+  less confusing than one that is stale on half of them.
+- **Fundamentals lag the market.** SEC figures are as-filed, so a ratio can be up
+  to a quarter behind the price it is divided by.
+- **Intelligence sectors are SIC-derived, not GICS.** SEC classifies filers with
+  a 1987 scheme mapped here to modern sector names — close, not official. The
+  core 50 keep their hand-curated GICS-style labels.
+  This has a real consequence, because valuation is ranked *within* sector: Lam
+  Research (`LRCX`) files under SIC 3559 "Special Industry Machinery" and lands
+  in **Industrials**, while its direct peers Applied Materials and KLA land in
+  Information Technology. Its valuation percentile is therefore drawn against
+  industrial machinery rather than semiconductor equipment. Every SIC-derived
+  sector carries this class of error; the fix is a real classification source,
+  not a longer override table. Named here rather than buried because a reader
+  comparing `LRCX` to `AMAT` on the board will notice, and should know why.
+- **Some issuers carry no fundamentals at all.** A company that reorganized has a
+  successor CIK with no XBRL history behind its ticker (ExxonMobil is the live
+  case). Those names rank on price metrics and are excluded from any horizon
+  whose coverage they cannot meet, rather than being scored as if unlevered.
 - **Unequal histories.** Symbols listed later (META 2012, TSLA 2010) have shorter
   records, so all-time leaderboards show `Years` and `From` instead of silently
   ranking unequal periods. Use the Market tab for like-for-like window returns.
@@ -246,7 +333,38 @@ Yahoo's chart API rate-limits bursts with HTTP 429. Two things matter:
   expects a real browser session. Don't "improve" it into a realistic browser
   string.
 
+### Fetching the intelligence universe
+
+Three resumable stages, each safe to run alone:
+
+```bash
+python fetch_intel.py --universe   # SEC frames pre-screen -> candidate list
+python fetch_intel.py --prices     # 5y daily history, then a liquidity cut
+python fetch_intel.py --facts      # SEC companyfacts -> fundamentals
+python build_db.py                 # load everything, rebuild metric_panel
+```
+
+Universe selection is two-stage on purpose. SEC's `frames` API ranks every filer
+on one concept in a single request, which is what makes a wide universe
+affordable at all — but it can only see reported fundamentals, and a company
+with large revenue can still be untradeable. So frames pre-screens on revenue
+*and* assets (assets catches banks and insurers, whose revenue understates their
+size), and the final cut is by realized dollar turnover.
+
+One line per company. A single CIK owns every listed line an issuer has — common
+stock, each preferred series, warrants, structured notes — so the primary ticker
+is chosen by traded volume rather than by pattern. Without that, JPMorgan enters
+the universe as `VYLD` and Bank of America as `MER-PK`, each carrying the
+parent's fundamentals under a ticker nobody researches.
+
+`fetch_intel.py` is optional: a clone that has never run it builds a working
+database with empty intelligence tables, and the page renders an empty state
+naming the command. Every other section is unaffected.
+
 ## Data source
 
-Yahoo Finance chart API (unauthenticated), daily closes. This project is for
-analysis and portfolio demonstration — it is not investment advice.
+Yahoo Finance chart API (unauthenticated) for prices, quotes, symbol search and
+headlines; SEC EDGAR XBRL (unauthenticated) for fundamentals, share counts and
+classification. Both are keyless, which is what keeps the public deploy working
+with no secrets set. This project is for analysis and portfolio demonstration —
+it is not investment advice.
