@@ -644,14 +644,26 @@ def _load_intel(conn: sqlite3.Connection) -> tuple[int, int, int]:
         n_sym = len(rows)
 
     if INTEL_PRICES_GZ.exists():
-        with gzip.open(INTEL_PRICES_GZ, "rt", newline="") as f:
-            rows = [(r["symbol"], r["date"], r["open"], r["high"], r["low"],
-                     r["close"], r["adj_close"], r["volume"]) for r in csv.DictReader(f)]
+        # STREAMED, not materialized. Building a list of 620,916 eight-tuples
+        # first costs ~300MB of Python objects, and Streamlit Community Cloud
+        # caps the whole process at 1GB -- the container was OOM-killed during
+        # the build, which surfaces as a blank page and a deploy log that simply
+        # stops. `executemany` consumes any iterable lazily, so a generator
+        # keeps only one row alive at a time.
+        n_px = 0
+
+        def _intel_price_rows():
+            nonlocal n_px
+            with gzip.open(INTEL_PRICES_GZ, "rt", newline="") as f:
+                for r in csv.DictReader(f):
+                    n_px += 1
+                    yield (r["symbol"], r["date"], r["open"], r["high"], r["low"],
+                           r["close"], r["adj_close"], r["volume"])
+
         conn.executemany(
             "INSERT OR REPLACE INTO intel_prices"
             " (symbol, date, open, high, low, close, adj_close, volume)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?)", rows)
-        n_px = len(rows)
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?)", _intel_price_rows())
 
     if INTEL_FUNDAMENTALS_GZ.exists():
         cols = [c for c in _INTEL_FUNDAMENTAL_COLUMNS]
@@ -703,19 +715,30 @@ def _num(value):
 
 
 def _load_prices(conn: sqlite3.Connection) -> int:
-    with _open_prices() as f:
-        rows = [
-            (r["symbol"], r["date"], r["open"], r["high"], r["low"],
-             r["close"], r["adj_close"], r["volume"])
-            for r in csv.DictReader(f)
-        ]
+    """Load the core 25-year price artifact.
+
+    Streamed rather than materialized, for the same reason `_load_intel` is: a
+    list of 300,536 eight-tuples is ~150MB of Python objects, and it used to be
+    held at the same time as the intel load's own list. Together they pushed the
+    build past Streamlit Community Cloud's 1GB ceiling.
+    """
+    count = 0
+
+    def rows():
+        nonlocal count
+        with _open_prices() as f:
+            for r in csv.DictReader(f):
+                count += 1
+                yield (r["symbol"], r["date"], r["open"], r["high"], r["low"],
+                       r["close"], r["adj_close"], r["volume"])
+
     conn.executemany(
         "INSERT OR REPLACE INTO prices"
         " (symbol, date, open, high, low, close, adj_close, volume)"
         " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        rows,
+        rows(),
     )
-    return len(rows)
+    return count
 
 
 def _load_symbols(conn: sqlite3.Connection) -> int:

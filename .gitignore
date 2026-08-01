@@ -1,6 +1,14 @@
 .venv/
 __pycache__/
 
+# Local secrets. `nlq._api_key()` reads st.secrets before the environment, so a
+# local ANTHROPIC_API_KEY normally lives here -- and this repo is public, so an
+# unignored secrets.toml would publish the key on the next `git add -A`.
+# (`.streamlit/config.toml` is deliberately absent for a separate reason: setting
+# a Streamlit `base` theme would fix one palette's chrome and break the other's.)
+.streamlit/secrets.toml
+.env
+
 # Build artifacts. app.py rebuilds the database from the committed
 # data/prices.csv.gz + data/symbols.csv on first run, so a fresh deploy needs
 # neither of these in version control.
