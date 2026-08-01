@@ -74,6 +74,18 @@ FONT_STACK = 'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif'
 MONO_STACK = 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace'
 
 
+def _rgba(hex_color: str, alpha: float) -> str:
+    """A palette hex as a translucent fill.
+
+    Local rather than imported from `charts.wash`: `charts` imports this module
+    for its templates, and a stylesheet reaching back into the chart layer to
+    tint a border would be a cycle for four characters of convenience.
+    """
+    h = hex_color.lstrip("#")
+    r, g, b = (int(h[i:i + 2], 16) for i in (0, 2, 4))
+    return f"rgba({r}, {g}, {b}, {alpha})"
+
+
 def app_css(p: dict) -> str:
     """The whole stylesheet. Written against the palette dict so a mode swap is
     one substitution and no rule hardcodes a hex."""
@@ -295,6 +307,35 @@ hr {{ border-color: var(--border); margin: 1.25rem 0; }}
 .mi-news a {{ color: var(--text-1); text-decoration: none; font-weight: 600; font-size: .9rem; }}
 .mi-news a:hover {{ color: var(--accent); text-decoration: underline; }}
 .mi-news .src {{ color: var(--text-2); font-size: .78rem; margin-top: .15rem; }}
+
+/* ---------- Today's Opportunities cards ----------
+   `min-height` so four cards with names of different lengths keep their buttons
+   on one line; without it the row stair-steps and reads as a rendering fault.
+   `.pick-on` marks the company currently in the panel below. */
+.mi-card.pick {{
+  margin-bottom: .35rem; min-height: 92px;
+  border-color: var(--border); transition: border-color .14s ease;
+}}
+.mi-card.pick:hover {{ border-color: var(--border-strong); }}
+.mi-card.pick-on {{
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px {_rgba(p['accent'], 0.35)};
+}}
+/* The disabled button on the active card is a STATE, not a broken control, so
+   it keeps the accent rather than going grey -- a greyed-out button beneath a
+   highlighted card reads as "this one is unavailable", the opposite of true. */
+div[class*="st-key-rs_pick_"] button:disabled,
+div[class*="st-key-rs_pick_"] button:disabled:hover {{
+  background: {_rgba(p['accent'], 0.14)} !important;
+  border-color: var(--accent) !important;
+  color: var(--accent) !important;
+  opacity: 1 !important;
+  cursor: default !important;
+  transform: none !important;
+}}
+div[class*="st-key-rs_pick_"] button:disabled p {{
+  color: var(--accent) !important; font-weight: 640 !important;
+}}
 
 /* ---------- tabs ---------- */
 .stTabs [data-baseweb="tab-list"] {{

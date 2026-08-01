@@ -332,32 +332,62 @@ def kpi_cards(cards: list[dict]) -> None:
     st.markdown("".join(out), unsafe_allow_html=True)
 
 
-def quote_strip(name: str, symbol: str, q: pd.Series, meta: str, pal: dict) -> None:
-    """The Yahoo-style price header for a selected symbol."""
-    ret = q.get("daily_return")
-    if ret is None or pd.isna(ret):
-        color, arrow, chg_txt = pal["muted"], "", "—"
+def _quote_html(name: str, symbol: str, price, meta: str,
+                change, pct, pal: dict) -> str:
+    """The shared markup behind both quote headers.
+
+    One function so the stored-history header and the live header are the same
+    object visually. They came from different sources (a `prices` row vs. a
+    provider payload) and briefly had different layouts, which made moving
+    between Snapshot and History feel like moving between two applications.
+    """
+    if pct is None or (isinstance(pct, float) and pct != pct):
+        color, chg_txt = pal["muted"], "—"
     else:
-        up = ret >= 0
+        up = pct >= 0
         color = pal["up"] if up else pal["down"]
         arrow = "▲" if up else "▼"
-        delta = q["close"] - q["prev_close"] if not pd.isna(q.get("prev_close")) else None
-        d_txt = f"{delta:+,.2f} " if delta is not None else ""
-        chg_txt = f"{arrow} {d_txt}({fmt_pct(ret)})"
+        d_txt = "" if change is None or change != change else f"{change:+,.2f} "
+        chg_txt = f"{arrow} {d_txt}({fmt_pct(pct)})"
 
-    st.markdown(
-        f"""
+    return f"""
 <div class="quote">
   <div style="flex:1 1 260px; min-width:0;">
     <div class="q-name">{esc(name)}<span class="q-tkr">{esc(symbol)}</span></div>
     <div class="q-meta">{esc(meta)}</div>
   </div>
   <div style="text-align:right;">
-    <div class="q-price">{fmt_price(q['close'])}</div>
+    <div class="q-price">{fmt_price(price)}</div>
     <div class="q-chg" style="color:{color};">{esc(chg_txt)}</div>
   </div>
 </div>
-""",
+"""
+
+
+def quote_strip(name: str, symbol: str, q: pd.Series, meta: str, pal: dict) -> None:
+    """The Yahoo-style price header for a symbol in the local database."""
+    ret = q.get("daily_return")
+    delta = None
+    if ret is not None and not pd.isna(ret) and not pd.isna(q.get("prev_close")):
+        delta = q["close"] - q["prev_close"]
+    st.markdown(
+        _quote_html(name, symbol, q["close"], meta,
+                    delta, None if pd.isna(ret) else ret, pal),
+        unsafe_allow_html=True,
+    )
+
+
+def live_quote_strip(q: dict, meta: str, pal: dict) -> None:
+    """The same header, from a live provider payload.
+
+    Snapshot previously opened straight onto a row of KPI cards, so the company
+    it described was named nowhere above the fold -- a reader who clicked in from
+    a pick card saw a price with no idea whose it was. Every quote screen worth
+    copying leads with the name and the ticker; this does too.
+    """
+    st.markdown(
+        _quote_html(q.get("name") or q.get("symbol") or "", q.get("symbol") or "",
+                    q.get("price"), meta, q.get("change"), q.get("change_pct"), pal),
         unsafe_allow_html=True,
     )
 

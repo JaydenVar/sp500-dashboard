@@ -805,10 +805,10 @@ def snapshot_view(ctx: Ctx, sym: str, version: str) -> None:
         )
         return
 
-    _quote_header(quote)
+    stored = dal.panel_row(version, sym)
+    _quote_header(quote, stored, pal)
     _price_chart(sym, quote, pal)
 
-    stored = dal.panel_row(version, sym)
     col_a, col_b = st.columns(2)
     with col_a:
         _profile_card(quote, stored)
@@ -821,26 +821,34 @@ def snapshot_view(ctx: Ctx, sym: str, version: str) -> None:
     _news_panel(sym)
 
 
-def _quote_header(q: dict) -> None:
-    change, pct = q.get("change"), q.get("change_pct")
-    direction = "flat" if not change else ("up" if change > 0 else "down")
-    stamp = ""
-    if q.get("market_time"):
-        stamp = dt.datetime.fromtimestamp(q["market_time"]).strftime("%b %d, %Y %H:%M")
+def _quote_header(q: dict, stored, pal: dict) -> None:
+    """Name the company before quoting its price.
 
+    The meta line is assembled from what is actually known: the exchange always,
+    the sector only when this company is in the ranked universe, and the stamp
+    only when the provider sent one. A header that prints "· ·" around missing
+    fields reads as broken rather than as incomplete.
+    """
+    bits = [q.get("exchange"), q.get("currency")]
+    if stored is not None and stored.get("sector"):
+        bits.insert(1, str(stored["sector"]))
+    if q.get("market_time"):
+        bits.append(dt.datetime.fromtimestamp(q["market_time"])
+                    .strftime("As of %b %d, %Y %H:%M"))
+    ui.live_quote_strip(q, " · ".join(str(b) for b in bits if b), pal)
+
+    # Price and its change moved into the header above, so the card row is four
+    # figures that are NOT repeated anywhere else on the panel.
     ui.kpi_cards([
-        {"icon": "💵", "label": "Price",
-         "value": ui.fmt_price(q["price"]),
-         "change": f"{ui.fmt_price(abs(change)) if change else '—'} "
-                   f"({ui.fmt_pct(pct) if pct is not None else '—'})",
-         "change_dir": direction,
-         "foot": f"{q.get('exchange') or ''} · {stamp}"},
         {"icon": "📊", "label": "Day Range",
          "value": f"{ui.fmt_price(q.get('day_low'))} – {ui.fmt_price(q.get('day_high'))}",
          "small": True, "foot": "Session low to high"},
         {"icon": "📈", "label": "52-Week Range",
          "value": f"{ui.fmt_price(q.get('w52_low'))} – {ui.fmt_price(q.get('w52_high'))}",
          "small": True, "foot": "Trailing one year"},
+        {"icon": "🔙", "label": "Previous close",
+         "value": ui.fmt_price(q.get("prev_close")),
+         "small": True, "foot": "What the change is measured from"},
         {"icon": "🔄", "label": "Volume",
          "value": ui.fmt_compact(q.get("volume")),
          "small": True, "foot": "Shares traded this session"},
@@ -1154,18 +1162,31 @@ def _opportunities(ctx: Ctx, version: str) -> None:
                   on_click=_goto_engine,
                   help="Every horizon, objective, risk band, sector and cap filter")
 
+    # The card that is currently loaded says so, and its button is disabled.
+    # Without this the strip looked identical before and after a click while the
+    # panel below silently changed underneath it -- the reader gets no
+    # confirmation that the thing they pressed is the thing they are now reading,
+    # and the pressed button keeps its focus styling, which reads as stuck.
+    current = st.session_state.get("rs_symbol", DEFAULT_SYMBOL)
     cols = st.columns(len(picks))
     for i, (_, row) in enumerate(picks.iterrows()):
+        sym = str(row["symbol"])
+        active = sym == current
         with cols[i]:
             st.markdown(
-                f'<div class="mi-card" style="margin-bottom:.35rem">'
-                f'<h4>{ui.esc(str(row["symbol"]))} '
+                f'<div class="mi-card pick{" pick-on" if active else ""}">'
+                f'<h4>{ui.esc(sym)} '
                 f'{market_intel.score_chip(float(row["overall_score"]), ctx.pal)}</h4>'
                 f'<div class="note">{ui.esc(str(row["name"])[:34])}<br>'
                 f'{ui.esc(str(row.get("sector") or "—"))}</div></div>',
                 unsafe_allow_html=True)
-            st.button("Research →", key=f"rs_pick_{row['symbol']}", width="stretch",
-                      on_click=_use_pick, args=(str(row["symbol"]),))
+            st.button(
+                "Showing below" if active else "Research →",
+                key=f"rs_pick_{sym}", width="stretch", disabled=active,
+                on_click=_use_pick, args=(sym,),
+                help=(f"{sym} is the company in the panel below" if active
+                      else f"Load {sym} into the panel below"),
+            )
 
     ui.note(
         "Scores are 0–100 composites of a stock's percentile ranks on the metrics "
